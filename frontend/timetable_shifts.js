@@ -19,7 +19,7 @@ async function loadStudentTimetableWithBreaks() {
   }
 
   try {
-    const response = await fetch(`${API_URL}/api/timetable/student/${roll_no}`);
+    const response = await fetch(`${ API_URL}/api/timetable/student/${roll_no}`);
     const data = await response.json();
 
     if (data.success) {

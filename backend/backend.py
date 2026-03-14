@@ -7596,141 +7596,224 @@ def generate_timetable_v2():
 
 
 def generate_timetable_with_contraints(assignments, subjects, rooms, breaks, academic_year, semester, algorithm):
-    """Generate timetable respecting breaks and class distribution constraints"""
+    """
+    Production-ready timetable generation using constraint satisfaction.
     
-    # Parse break times for quick lookup
-    break_slots = set()  # (day, start_time, end_time)
-    for brk in breaks:
-        break_slots.add((
-            brk.get("day_of_week"),
-            brk.get("start_time"),
-            brk.get("end_time")
-        ))
+    Algorithm:
+    1. Uses three conflict trackers: facultyBusy, roomBusy, sectionBusy
+    2. Iterates: Year → Section → Subject (subject-first approach)
+    3. Theory slots: Use periods [1,2,3,5] (avoid period 4 lunch)
+    4. Lab slots: Consecutive afternoon pairs [[6,7],[7,8],[5,6]]
+    5. Faculty assignment: Round-robin rotation
+    6. Room uniqueness: No faculty uses same room twice per day
+    7. Attempts: 80 for theory, 50 for labs
+    """
     
-    # Define working hours (08:00 to 18:00 in hours)
-    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
-    hours_per_day = ["08:00", "09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00"]
+    import random
     
-    # Group assignments by section to track distribution
-    sections_subjects = {}  # section -> list of (subject_code, faculty, type)
-    for asgn in assignments:
-        section = asgn.get("section", "")
-        subject = asgn.get("subject_code", "")
-        subject_name = asgn.get("subject_name", "")
-        faculty = asgn.get("faculty_username", "")
+    # Period configuration
+    PERIODS = {
+        1: {'start': '09:00', 'end': '10:00', 'shift': 1},
+        2: {'start': '10:00', 'end': '11:00', 'shift': 1},
+        3: {'start': '11:15', 'end': '12:15', 'shift': 1},
+        4: {'start': '12:15', 'end': '01:15', 'shift': 1},  # Lunch - excluded from theory
+        5: {'start': '02:00', 'end': '03:00', 'shift': 2},
+        6: {'start': '03:00', 'end': '04:00', 'shift': 2},
+        7: {'start': '04:00', 'end': '05:00', 'shift': 2},
+        8: {'start': '05:00', 'end': '06:00', 'shift': 2},
+    }
+    
+    THEORY_PERIODS = [1, 2, 3, 5]  # Excluding lunch (4) and afternoon labs (6,7,8)
+    LAB_PAIRS = [[6, 7], [7, 8], [5, 6]]  # Consecutive afternoon periods for 2-hour labs
+    DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+    
+    # ── CONFLICT TRACKERS ──
+    faculty_busy = {}    # key: "faculty|day|period" → True if occupied
+    room_busy = {}       # key: "room|day|period" → True if occupied
+    section_busy = {}    # key: "section|day|period" → True if occupied
+    
+    def conflict_key_fac(fac, day, period):
+        return f"{fac}|{day}|{period}"
+    
+    def conflict_key_room(room, day, period):
+        return f"{room}|{day}|{period}"
+    
+    def conflict_key_sec(sec, day, period):
+        return f"{sec}|{day}|{period}"
+    
+    def can_assign(fac, sec, day, period, room):
+        """Check if slot is free in all three conflict trackers"""
+        return (conflict_key_fac(fac, day, period) not in faculty_busy and
+                conflict_key_room(room, day, period) not in room_busy and
+                conflict_key_sec(sec, day, period) not in section_busy)
+    
+    def commit(fac, sec, day, period, room, code, name, slot_type, year, prog):
+        """Mark slot as occupied in all trackers and add to results"""
+        faculty_busy[conflict_key_fac(fac, day, period)] = True
+        room_busy[conflict_key_room(room, day, period)] = True
+        section_busy[conflict_key_sec(sec, day, period)] = True
         
-        if section not in sections_subjects:
-            sections_subjects[section] = []
-        sections_subjects[section].append({
-            "subject_code": subject,
-            "subject_name": subject_name,
-            "faculty": faculty,
-            "type": "Theory"
+        p = PERIODS[period]
+        generated_slots.append({
+            'academic_year': academic_year,
+            'semester': semester,
+            'section': sec,
+            'year': year,
+            'subject_code': code,
+            'subject_name': name,
+            'faculty_username': fac,
+            'day_of_week': day,
+            'period_number': period,
+            'start_time': p['start'],
+            'end_time': p['end'],
+            'room_number': room,
+            'type': slot_type,
+            'program': prog,
+            'shift': p['shift'],
+            'is_active': True,
         })
     
-    # Add lab sessions (2 per subject per week)
-    for asgn in assignments:
-        section = asgn.get("section", "")
-        subject = asgn.get("subject_code", "")
-        subject_name = asgn.get("subject_name", "")
-        faculty = asgn.get("faculty_username", "")
-        
-        if section in sections_subjects:
-            # Add 2 lab sessions per subject per week
-            sections_subjects[section].append({
-                "subject_code": subject + "_Lab1",
-                "subject_name": subject_name + " (Lab-1)",
-                "faculty": faculty,
-                "type": "Lab"
-            })
-            sections_subjects[section].append({
-                "subject_code": subject + "_Lab2",
-                "subject_name": subject_name + " (Lab-2)",
-                "faculty": faculty,
-                "type": "Lab"
-            })
+    def get_rooms_used_today(fac, day):
+        """Get set of rooms already used by faculty on this day"""
+        used = set()
+        for slot in generated_slots:
+            if slot['faculty_username'] == fac and slot['day_of_week'] == day:
+                used.add(slot['room_number'])
+        return used
     
+    # ── PREPARE DATA ──
     generated_slots = []
-    faculty_slots = {}  # track faculty hours per day
-    room_slots = {}  # track room usage per day
-    subject_count = {}  # track theory + lab count per subject per section
+    conflicts_list = []
     
-    # Scheduling algorithm
-    for section, subjects_list in sections_subjects.items():
-        subject_distribution = {}  # subject -> count of theory + lab sessions
+    # Group assignments by section and year
+    section_year_subjects = {}  # (section, year) → [(code, name, faculty), ...]
+    for asgn in assignments:
+        sec = asgn.get('section', '')
+        yr = asgn.get('year', 1)
+        code = asgn.get('subject_code', '')
+        name = asgn.get('subject_name', '')
+        fac = asgn.get('faculty_username', '')
+        dept = asgn.get('department', '')
+        prog = asgn.get('program', 'B.Tech')
         
-        for day in days:
-            for hour_idx, start_hour in enumerate(hours_per_day):
-                # Calculate end hour
-                end_hour = hours_per_day[hour_idx + 1] if hour_idx + 1 < len(hours_per_day) else "18:00"
+        if code and name and fac:
+            key = (sec, yr)
+            if key not in section_year_subjects:
+                section_year_subjects[key] = []
+            section_year_subjects[key].append({
+                'code': code,
+                'name': name,
+                'faculty': fac,
+                'dept': dept,
+                'prog': prog,
+            })
+    
+    room_list = [rm.get('room_number', '') for rm in rooms if rm.get('room_number')]
+    faculty_list = list(set(a.get('faculty_username', '') for a in assignments if a.get('faculty_username')))
+    
+    # ── MAIN SCHEDULING LOOP ──
+    # Iterate: Year → Section → Subject
+    for (section, year) in sorted(section_year_subjects.keys()):
+        subj_list = section_year_subjects[(section, year)]
+        fac_idx = 0
+        
+        for subj in subj_list:
+            code = subj['code']
+            name = subj['name']
+            fac = faculty_list[fac_idx % len(faculty_list)] if faculty_list else subj['faculty']
+            fac_idx += 1
+            prog = subj.get('prog', 'B.Tech')
+            
+            # ── PLACE 3 THEORY SLOTS ──
+            theory_target = 3
+            theory_placed = 0
+            attempts = 0
+            used_theory_days = set()
+            
+            while theory_placed < theory_target and attempts < 80:
+                attempts += 1
+                day = random.choice(DAYS)
                 
-                # Check if this is a break slot
-                is_break = False
-                for brk in breaks:
-                    if brk.get("day_of_week") == day:
-                        br_start = brk.get("start_time", "")
-                        br_end = brk.get("end_time", "")
-                        # Simple check: if slot start time matches break start, skip
-                        if start_hour >= br_start and start_hour < br_end:
-                            is_break = True
-                            break
-                
-                if is_break:
-                    continue  # Skip break slots
-                
-                # Find available faculty and room
-                if not subjects_list:
+                # Don't place same subject twice on same day
+                if day in used_theory_days:
                     continue
                 
-                for subj in subjects_list:
-                    subject_code = subj["subject_code"]
-                    subject_name = subj["subject_name"]
-                    faculty = subj["faculty"]
-                    subj_type = subj["type"]
+                period = random.choice(THEORY_PERIODS)
+                
+                # Get available rooms (not used by this faculty today)
+                rooms_used = get_rooms_used_today(fac, day)
+                avail_rooms = [r for r in room_list if r not in rooms_used]
+                room = random.choice(avail_rooms) if avail_rooms else (room_list[0] if room_list else 'T101')
+                
+                if can_assign(fac, section, day, period, room):
+                    commit(fac, section, day, period, room, code, name, 'Theory', year, prog)
+                    used_theory_days.add(day)
+                    theory_placed += 1
+            
+            if theory_placed < theory_target:
+                conflicts_list.append(f"{code} (Sec {section}): Only {theory_placed}/{theory_target} theory slots")
+            
+            # ── PLACE 2 LAB SESSIONS (2 consecutive hours each) ──
+            lab_target = 2
+            lab_placed = 0
+            attempts = 0
+            
+            while lab_placed < lab_target and attempts < 50:
+                attempts += 1
+                day = random.choice(DAYS)
+                lab_pairs = LAB_PAIRS[:]
+                random.shuffle(lab_pairs)
+                
+                for pair in lab_pairs:
+                    p1, p2 = pair
                     
-                    # Check distribution: max 3 theory + 2 lab per week per subject
-                    key = f"{section}_{subject_code}"
-                    count = subject_distribution.get(key, 0)
+                    # Get lab rooms
+                    rooms_used = get_rooms_used_today(fac, day)
+                    avail_labs = [r for r in room_list if r not in rooms_used]
+                    lab_room = random.choice(avail_labs) if avail_labs else (room_list[-1] if room_list else 'L101')
                     
-                    # Enforce 3 theory + 2 lab limit
-                    if "_Lab" in subject_code and count >= 2:
-                        continue  # Already have 2 lab sessions
-                    if "_Lab" not in subject_code and count >= 3:
-                        continue  # Already have 3 theory sessions
-                    
-                    # Find available room
-                    room = None
-                    for rm in rooms:
-                        rm_num = rm.get("room_number", "")
-                        rm_key = f"{rm_num}_{day}_{start_hour}"
-                        if rm_key not in room_slots:
-                            room = rm_num
-                            room_slots[rm_key] = True
-                            break
-                    
-                    if not room:
-                        continue  # No available room
-                    
-                    # Create slot
-                    slot = {
-                        "academic_year": academic_year,
-                        "semester": semester,
-                        "section": section,
-                        "subject_code": subject_code,
-                        "subject_name": subject_name,
-                        "faculty_username": faculty,
-                        "day_of_week": day,
-                        "start_time": start_hour,
-                        "end_time": end_hour,
-                        "room_number": room,
-                        "type": subj_type,
-                        "period_number": hour_idx + 1,
-                        "is_active": True
-                    }
-                    
-                    generated_slots.append(slot)
-                    subject_distribution[key] = count + 1
-                    break  # Move to next day/hour after scheduling
+                    if can_assign(fac, section, day, p1, lab_room) and can_assign(fac, section, day, p2, lab_room):
+                        # Commit both periods as one 2-hour lab block
+                        p1_cfg = PERIODS[p1]
+                        p2_cfg = PERIODS[p2]
+                        
+                        faculty_busy[conflict_key_fac(fac, day, p1)] = True
+                        faculty_busy[conflict_key_fac(fac, day, p2)] = True
+                        room_busy[conflict_key_room(lab_room, day, p1)] = True
+                        room_busy[conflict_key_room(lab_room, day, p2)] = True
+                        section_busy[conflict_key_sec(section, day, p1)] = True
+                        section_busy[conflict_key_sec(section, day, p2)] = True
+                        
+                        # Single entry for 2-hour lab block
+                        generated_slots.append({
+                            'academic_year': academic_year,
+                            'semester': semester,
+                            'section': section,
+                            'year': year,
+                            'subject_code': code + '_Lab',
+                            'subject_name': name + ' (Lab)',
+                            'faculty_username': fac,
+                            'day_of_week': day,
+                            'period_number': p1,
+                            'start_time': p1_cfg['start'],
+                            'end_time': p2_cfg['end'],  # 2-hour block
+                            'room_number': lab_room,
+                            'type': 'Lab',
+                            'program': prog,
+                            'shift': p1_cfg['shift'],
+                            'lab_pair': [p1, p2],
+                            'is_active': True,
+                        })
+                        
+                        lab_placed += 1
+                        break
+            
+            if lab_placed < lab_target:
+                conflicts_list.append(f"{code} Lab (Sec {section}): Only {lab_placed}/{lab_target} lab sessions")
+    
+    # Add conflicts to each generated slot
+    if conflicts_list:
+        logger.warning(f"[Timetable Generation] Conflicts: {conflicts_list}")
     
     return generated_slots
 
