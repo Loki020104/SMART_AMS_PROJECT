@@ -20,16 +20,20 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first (for better caching)
-COPY requirements.txt .
+COPY backend/requirements.txt .
 
 # Install Python dependencies
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY backend.py ./
-COPY qr_security.py ./
-COPY database.py ./
+COPY backend/backend.py ./
+COPY backend/qr_security.py ./
+COPY backend/database.py ./
+COPY backend/face_auth_routes.py ./
+COPY backend/face_registration_handler.py ./
+COPY backend/face_recognition_with_liveness.py ./
+COPY backend/auth_service.py ./
 
 # Expose port (Cloud Run uses PORT env var)
 EXPOSE 8080
