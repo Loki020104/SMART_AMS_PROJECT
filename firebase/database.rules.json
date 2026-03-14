@@ -1,0 +1,49 @@
+{
+  "rules": {
+    "users": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "attendance": {
+      ".read": "auth != null",
+      ".write": true
+    },
+    "student_attendance": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "announcements": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "events": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "qr_sessions": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "timetable": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "courses": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "online_classes": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "leave_applications": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "fees": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    }
+  }
+}
+

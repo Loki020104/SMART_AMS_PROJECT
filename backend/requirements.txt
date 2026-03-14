@@ -1,0 +1,47 @@
+# SmartAMS Python Dependencies
+# Face Recognition, DLib, and API requirements
+# Updated for Python 3.14 compatibility
+
+# Core dependencies
+Flask>=3.0.0
+Flask-CORS>=6.0.0
+python-dotenv>=1.0.0
+numpy>=2.0.0
+Pillow>=10.0.0
+
+# Face Recognition
+face-recognition>=1.3.0
+face-recognition-models>=0.3.0
+
+# Computer vision
+opencv-python-headless>=4.8.0
+
+# DLib for face recognition - ALREADY INSTALLED from build/dlib
+# If you need to reinstall it:
+# cd build/dlib && pip install -e . && cd ../..
+# The precompiled version in build/dlib is available and preferred
+
+# Database & APIs
+supabase>=2.4.0
+requests>=2.31.0
+psycopg2-binary>=2.9.0
+
+# Firebase Admin SDK (token verification & user management)
+firebase-admin>=6.0.0
+
+# QR Code & Security
+qrcode>=7.4.0
+cryptography>=41.0.0
+
+# Utilities
+python-multipart>=0.0.6
+gunicorn>=21.0.0
+
+# Optional for debugging
+ipython>=8.15.0
+
+# Note: If dlib installation fails, use the pre-compiled version in build/dlib:
+# cd build/dlib && pip install -e .
+#
+# For face-recognition models, use:
+git+https://github.com/ageitgey/face_recognition_models
