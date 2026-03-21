@@ -99,6 +99,27 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
 
+# ── CORS Error Handler & After-Request Hook ────────────────
+@app.after_request
+def after_request(response):
+    """Ensure CORS headers are added to ALL responses, including error responses."""
+    origin = request.headers.get('Origin')
+    # Allow all origins (you can restrict this if needed)
+    if origin:
+        response.headers['Access-Control-Allow-Origin'] = origin
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    return response
+
+@app.errorhandler(500)
+def handle_500(e):
+    """Handle 500 errors with proper error detail and logging."""
+    print(f"[ERROR] 500 Internal Server Error: {str(e)}")
+    import traceback
+    traceback.print_exc()
+    return jsonify(success=False, error="Internal server error", details=str(e)), 500
+
 # ── Firebase Admin SDK ─────────────────────────────────────
 # On Cloud Run the default service account provides credentials automatically.
 # Locally, set GOOGLE_APPLICATION_CREDENTIALS or just provide the project ID.
@@ -3613,46 +3634,317 @@ def delete_timetable_by_faculty():
 
 @app.route("/api/timetable/delete-bulk", methods=["DELETE"])
 def delete_timetable_bulk():
-    """Delete a list of timetable entries by UUID — synced to Supabase, RTDB, and Firestore."""
+    """Soft-delete timetable entries (move to archive table instead of hard deleting).
+    Body: { ids: [...] }
+    """
     if not sb:
         return jsonify(success=False, error="Supabase not configured"), 500
     d = request.json or {}
     ids = [str(i).strip() for i in (d.get("ids") or []) if str(i).strip()]
     if not ids:
         return jsonify(success=False, error="ids array is required"), 400
+    
     try:
+        # 1. Fetch all records to be deleted
+        timetable_records = sb.table("timetable").select("*").in_("id", ids).execute().data or []
+        
+        # 2. Move to archive table
+        for record in timetable_records:
+            archive_record = {
+                "original_id": record.get("id"),
+                "faculty_id": record.get("faculty_id"),
+                "faculty_name": record.get("faculty_name"),
+                "faculty_username": record.get("faculty_username"),
+                "batch": record.get("batch"),
+                "session_type": record.get("session_type"),
+                "subject": record.get("subject"),
+                "day_of_week": record.get("day_of_week"),
+                "hour_number": record.get("hour_number"),
+                "start_time": record.get("start_time"),
+                "end_time": record.get("end_time"),
+                "room_number": record.get("room_number"),
+                "academic_year": record.get("academic_year"),
+                "semester": record.get("semester"),
+                "mode": record.get("mode"),
+                "created_at": record.get("created_at"),
+                "updated_at": record.get("updated_at"),
+                "deletion_reason": d.get("reason", "Admin deletion")
+            }
+            sb.table("timetable_archive").insert(archive_record).execute()
+        
+        # 3. Hard delete from main table
         sb.table("timetable").delete().in_("id", ids).execute()
+        
+        # 4. Sync deletion to RTDB and Firestore
         for rid in ids:
             rtdb_delete(f"/timetable/{rid}")
             fstore_delete("timetable", rid)
-        return jsonify(success=True, deleted=len(ids))
+        
+        print(f"[SOFT-DELETE] Moved {len(ids)} timetable entries to archive")
+        return jsonify(success=True, archived=len(ids), message="Timetable entries moved to archive")
     except Exception as e:
+        print(f"[ERROR] Timetable soft-delete failed: {str(e)}")
         return jsonify(success=False, error=str(e)), 500
 
 
 @app.route("/api/users/delete-bulk", methods=["DELETE"])
 def delete_users_bulk():
-    """Delete multiple users by ID — synced to Supabase, RTDB, and Firestore."""
+    """Soft-delete users (move to archive table instead of hard deleting).
+    Body: { user_ids: [...], reason: "optional reason" }
+    """
     if not sb:
         return jsonify(success=False, error="Supabase not configured"), 500
     d = request.json or {}
     ids = [str(i).strip() for i in (d.get("user_ids") or d.get("ids") or []) if str(i).strip()]
     if not ids:
         return jsonify(success=False, error="user_ids array is required"), 400
+    
     try:
-        for uid in ids:
+        # 1. Fetch all users to be deleted
+        user_records = sb.table("users").select("*").in_("id", ids).execute().data or []
+        
+        # 2. Move to archive table
+        for user in user_records:
+            archive_user = {
+                "original_id": user.get("id"),
+                "username": user.get("username"),
+                "email": user.get("email"),
+                "password_hash": user.get("password_hash"),
+                "full_name": user.get("full_name"),
+                "role": user.get("role"),
+                "roll_no": user.get("roll_no"),
+                "program": user.get("program"),
+                "section": user.get("section"),
+                "year": user.get("year"),
+                "semester": user.get("semester"),
+                "employee_id": user.get("employee_id"),
+                "designation": user.get("designation"),
+                "subjects": user.get("subjects"),
+                "department": user.get("department"),
+                "phone": user.get("phone"),
+                "firebase_uid": user.get("firebase_uid"),
+                "is_active": user.get("is_active"),
+                "created_at": user.get("created_at"),
+                "updated_at": user.get("updated_at"),
+                "last_login": user.get("last_login"),
+                "deletion_reason": d.get("reason", "Admin deletion")
+            }
+            sb.table("users_archive").insert(archive_user).execute()
+            
+            # Also delete face encodings
             try:
-                user_rows = sb.table("users").select("roll_no").eq("id", uid).execute().data
-                if user_rows and user_rows[0].get("roll_no"):
-                    sb.table("face_encodings").delete().eq("roll_no", user_rows[0]["roll_no"]).execute()
+                roll_no = user.get("roll_no")
+                if roll_no:
+                    sb.table("face_encodings").delete().eq("roll_no", roll_no).execute()
             except Exception:
                 pass
+        
+        # 3. Hard delete from main users table
         sb.table("users").delete().in_("id", ids).execute()
+        
+        # 4. Sync deletion to RTDB and Firestore
         for uid in ids:
             rtdb_delete(f"/users/{uid}")
             fstore_delete("users", uid)
-        print(f"[SYNC] Bulk-deleted {len(ids)} users from Supabase + RTDB + Firestore")
-        return jsonify(success=True, deleted=len(ids))
+        
+        print(f"[SOFT-DELETE] Moved {len(ids)} users to archive")
+        return jsonify(success=True, archived=len(ids), message="Users moved to archive")
+    except Exception as e:
+        print(f"[ERROR] User soft-delete failed: {str(e)}")
+        return jsonify(success=False, error=str(e)), 500
+
+
+# ────────────────────────────────────────────────────────────────────
+# ARCHIVE MANAGEMENT ENDPOINTS
+# ────────────────────────────────────────────────────────────────────
+
+@app.route("/api/archive/users", methods=["GET"])
+def get_archived_users():
+    """Retrieve all archived users. Query params: limit, offset"""
+    if not sb:
+        return jsonify(success=False, error="Supabase not configured"), 500
+    try:
+        limit = int(request.args.get("limit", 100))
+        offset = int(request.args.get("offset", 0))
+        
+        archived = sb.table("users_archive").select("*").order("deleted_at", desc=True).range(offset, offset + limit - 1).execute().data or []
+        total_count = sb.table("users_archive").select("id", count="exact").execute()
+        total = total_count.count if hasattr(total_count, 'count') else len(archived)
+        
+        return jsonify(success=True, archived_users=archived, total=total, limit=limit, offset=offset)
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@app.route("/api/archive/timetable", methods=["GET"])
+def get_archived_timetable():
+    """Retrieve all archived timetable entries. Query params: limit, offset"""
+    if not sb:
+        return jsonify(success=False, error="Supabase not configured"), 500
+    try:
+        limit = int(request.args.get("limit", 100))
+        offset = int(request.args.get("offset", 0))
+        
+        archived = sb.table("timetable_archive").select("*").order("deleted_at", desc=True).range(offset, offset + limit - 1).execute().data or []
+        total_count = sb.table("timetable_archive").select("id", count="exact").execute()
+        total = total_count.count if hasattr(total_count, 'count') else len(archived)
+        
+        return jsonify(success=True, archived_timetable=archived, total=total, limit=limit, offset=offset)
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@app.route("/api/archive/users/restore", methods=["POST"])
+def restore_archived_user():
+    """Restore an archived user back to active users table.
+    Body: { archive_id: "uuid" }
+    """
+    if not sb:
+        return jsonify(success=False, error="Supabase not configured"), 500
+    
+    d = request.json or {}
+    archive_id = d.get("archive_id", "").strip()
+    if not archive_id:
+        return jsonify(success=False, error="archive_id is required"), 400
+    
+    try:
+        # Get archived user
+        archived_user = sb.table("users_archive").select("*").eq("id", archive_id).execute().data
+        if not archived_user:
+            return jsonify(success=False, error="Archive record not found"), 404
+        
+        user = archived_user[0]
+        
+        # Create new user (with new ID since original_id might already exist)
+        new_user = {
+            "username": user.get("username"),
+            "email": user.get("email"),
+            "password_hash": user.get("password_hash"),
+            "full_name": user.get("full_name"),
+            "role": user.get("role"),
+            "roll_no": user.get("roll_no"),
+            "program": user.get("program"),
+            "section": user.get("section"),
+            "year": user.get("year"),
+            "semester": user.get("semester"),
+            "employee_id": user.get("employee_id"),
+            "designation": user.get("designation"),
+            "subjects": user.get("subjects"),
+            "department": user.get("department"),
+            "phone": user.get("phone"),
+            "firebase_uid": user.get("firebase_uid"),
+            "is_active": True
+        }
+        
+        result = sb.table("users").insert(new_user).execute()
+        
+        if result.data:
+            restored_id = result.data[0].get("id")
+            rtdb_set(f"/users/{restored_id}", new_user)
+            fstore_set("users", restored_id, new_user)
+            
+            # Remove from archive
+            sb.table("users_archive").delete().eq("id", archive_id).execute()
+            
+            return jsonify(success=True, message="User restored successfully", new_id=restored_id)
+        else:
+            return jsonify(success=False, error="Failed to restore user"), 500
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@app.route("/api/archive/users/purge", methods=["DELETE"])
+def purge_archived_user():
+    """Permanently delete an archived user (cannot be restored).
+    Body: { archive_id: "uuid" }
+    """
+    if not sb:
+        return jsonify(success=False, error="Supabase not configured"), 500
+    
+    d = request.json or {}
+    archive_id = d.get("archive_id", "").strip()
+    if not archive_id:
+        return jsonify(success=False, error="archive_id is required"), 400
+    
+    try:
+        sb.table("users_archive").delete().eq("id", archive_id).execute()
+        return jsonify(success=True, message="Archived user purged permanently")
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@app.route("/api/archive/timetable/restore", methods=["POST"])
+def restore_archived_timetable():
+    """Restore an archived timetable entry back to active timetable.
+    Body: { archive_id: "uuid" }
+    """
+    if not sb:
+        return jsonify(success=False, error="Supabase not configured"), 500
+    
+    d = request.json or {}
+    archive_id = d.get("archive_id", "").strip()
+    if not archive_id:
+        return jsonify(success=False, error="archive_id is required"), 400
+    
+    try:
+        # Get archived timetable entry
+        archived_entry = sb.table("timetable_archive").select("*").eq("id", archive_id).execute().data
+        if not archived_entry:
+            return jsonify(success=False, error="Archive record not found"), 404
+        
+        entry = archived_entry[0]
+        
+        # Create new timetable entry (with new ID)
+        new_entry = {
+            "faculty_id": entry.get("faculty_id"),
+            "faculty_name": entry.get("faculty_name"),
+            "faculty_username": entry.get("faculty_username"),
+            "batch": entry.get("batch"),
+            "session_type": entry.get("session_type"),
+            "subject": entry.get("subject"),
+            "day_of_week": entry.get("day_of_week"),
+            "hour_number": entry.get("hour_number"),
+            "start_time": entry.get("start_time"),
+            "end_time": entry.get("end_time"),
+            "room_number": entry.get("room_number"),
+            "academic_year": entry.get("academic_year"),
+            "semester": entry.get("semester"),
+            "mode": entry.get("mode")
+        }
+        
+        result = sb.table("timetable").insert(new_entry).execute()
+        
+        if result.data:
+            restored_id = result.data[0].get("id")
+            rtdb_set(f"/timetable/{restored_id}", new_entry)
+            fstore_set("timetable", restored_id, new_entry)
+            
+            # Remove from archive
+            sb.table("timetable_archive").delete().eq("id", archive_id).execute()
+            
+            return jsonify(success=True, message="Timetable entry restored successfully", new_id=restored_id)
+        else:
+            return jsonify(success=False, error="Failed to restore timetable entry"), 500
+    except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@app.route("/api/archive/timetable/purge", methods=["DELETE"])
+def purge_archived_timetable():
+    """Permanently delete an archived timetable entry (cannot be restored).
+    Body: { archive_id: "uuid" }
+    """
+    if not sb:
+        return jsonify(success=False, error="Supabase not configured"), 500
+    
+    d = request.json or {}
+    archive_id = d.get("archive_id", "").strip()
+    if not archive_id:
+        return jsonify(success=False, error="archive_id is required"), 400
+    
+    try:
+        sb.table("timetable_archive").delete().eq("id", archive_id).execute()
+        return jsonify(success=True, message="Archived timetable entry purged permanently")
     except Exception as e:
         return jsonify(success=False, error=str(e)), 500
 

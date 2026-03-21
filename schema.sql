@@ -761,6 +761,64 @@ ALTER TABLE exam_marks_format ADD COLUMN IF NOT EXISTS created_by  UUID;
 ALTER TABLE exam_marks_format ADD COLUMN IF NOT EXISTS is_active   BOOLEAN DEFAULT true;
 
 -- ────────────────────────────────────────────────────────────────────
+-- 28. ARCHIVE TABLES (Soft Deletes)
+-- ────────────────────────────────────────────────────────────────────
+-- Archive table for deleted users
+CREATE TABLE IF NOT EXISTS users_archive (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    original_id   UUID,
+    username      VARCHAR(100),
+    email         VARCHAR(255),
+    password_hash VARCHAR(255),
+    full_name     VARCHAR(255),
+    role          VARCHAR(50),
+    roll_no       VARCHAR(100),
+    program       VARCHAR(100),
+    section       VARCHAR(50),
+    year          SMALLINT,
+    semester      SMALLINT,
+    employee_id   VARCHAR(100),
+    designation   VARCHAR(100),
+    subjects      TEXT,
+    department    VARCHAR(100),
+    phone         VARCHAR(20),
+    firebase_uid  VARCHAR(255),
+    is_active     BOOLEAN,
+    created_at    TIMESTAMPTZ,
+    updated_at    TIMESTAMPTZ,
+    last_login    TIMESTAMPTZ,
+    deleted_at    TIMESTAMPTZ DEFAULT now(),
+    deleted_by    UUID,
+    deletion_reason TEXT DEFAULT ''
+);
+
+-- Archive table for deleted timetable entries
+CREATE TABLE IF NOT EXISTS timetable_archive (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    original_id           UUID,
+    faculty_id            TEXT,
+    faculty_name          TEXT,
+    faculty_username      TEXT,
+    batch                 TEXT,
+    session_type          TEXT,
+    subject               TEXT,
+    day_of_week           TEXT,
+    hour_number           INT,
+    start_time            TIME,
+    end_time              TIME,
+    room_number           TEXT,
+    academic_year         TEXT,
+    semester              INT,
+    mode                  TEXT,
+    staff_id              UUID,
+    created_at            TIMESTAMPTZ,
+    updated_at            TIMESTAMPTZ,
+    deleted_at            TIMESTAMPTZ DEFAULT now(),
+    deleted_by            UUID,
+    deletion_reason       TEXT DEFAULT ''
+);
+
+-- ────────────────────────────────────────────────────────────────────
 -- 29. INDEXES
 -- ────────────────────────────────────────────────────────────────────
 -- Users
