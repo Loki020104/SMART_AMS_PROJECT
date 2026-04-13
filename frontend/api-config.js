@@ -1,19 +1,18 @@
 // SmartAMS API Configuration
 // This file configures the backend API endpoint
+// 🔐 SECURITY NOTE: Backend secrets (Supabase, JWT, etc) are NOT exposed here
+// All sensitive operations must go through the authenticated backend API
 
 window.AMS_CONFIG = {
-  // Development: use localhost:6001
-  // Production: use Cloud Run URL
-  API_URL: window.location.hostname === 'localhost' 
-    ? 'http://localhost:6001'
-    : 'https://smartams-backend-76160313029.us-central1.run.app',
+  // Always use deployed backend
+  API_URL: 'https://smartams-backend-ts3a5sewfq-uc.a.run.app',
   
-  // Enable debug logging
-  DEBUG: window.location.hostname === 'localhost',
+  // Enable debug logging (disabled in production)
+  DEBUG: false,
 
-  // Supabase configuration (used by backend; stored here for reference)
-  SUPABASE_URL: 'https://qovojskhkmppktwaozpa.supabase.co',
-  SUPABASE_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFvdm9qc2toa21wcGt0d2FvenBhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzEyNjA1OTgsImV4cCI6MjA4NjgzNjU5OH0.Vx99lBfzbnbcSOe4IeBOCudVM_r6Cxtgk4L15fB5XAI'
+  // 🔒 IMPORTANT: Do not expose backend secrets here
+  // Supabase key is kept on backend only and accessed via authenticated API calls
+  // All database operations must go through the backend REST API
 };
 
 // ── Firebase Init (Auth + Realtime Database) ─────────────
@@ -40,7 +39,9 @@ window.AMS_CONFIG = {
     try {
       firebase.initializeApp(firebaseConfig);
       window.firebaseAuth = firebase.auth();
+      // Enable Firebase RTDB for real-time features
       window.rtdb = firebase.database();
+      console.log('✅ Firebase RTDB initialized');
     } catch (e) {
       console.warn('[Firebase] initializeApp failed:', e.message);
       window.firebaseAuth = null;
@@ -76,41 +77,130 @@ window.AMS_CONFIG = {
 window.DB = {
   /** Read a path once, returns value or null */
   async get(path) {
-    const snap = await window.rtdb.ref(path).once('value');
-    return snap.val();
+    if (!window.rtdb) {
+      console.warn('[DB] RTDB not available for get:', path);
+      return null;
+    }
+    try {
+      const snap = await window.rtdb.ref(path).once('value');
+      return snap.val();
+    } catch (err) {
+      console.error('[DB] Error getting', path, err);
+      return null;
+    }
   },
   /** Write/overwrite a path */
   async set(path, value) {
-    return window.rtdb.ref(path).set(value);
+    if (!window.rtdb) {
+      console.warn('[DB] RTDB not available for set:', path);
+      return null;
+    }
+    try {
+      return window.rtdb.ref(path).set(value);
+    } catch (err) {
+      console.error('[DB] Error setting', path, err);
+      return null;
+    }
   },
   /** Update specific fields at a path */
   async update(path, value) {
-    return window.rtdb.ref(path).update(value);
+    if (!window.rtdb) {
+      console.warn('[DB] RTDB not available for update:', path);
+      return null;
+    }
+    try {
+      return window.rtdb.ref(path).update(value);
+    } catch (err) {
+      console.error('[DB] Error updating', path, err);
+      return null;
+    }
   },
   /** Push a new child under a path, returns the new key */
   async push(path, value) {
-    const ref = await window.rtdb.ref(path).push(value);
-    return ref.key;
+    if (!window.rtdb) {
+      console.warn('[DB] RTDB not available for push:', path);
+      return null;
+    }
+    try {
+      const ref = await window.rtdb.ref(path).push(value);
+      return ref.key;
+    } catch (err) {
+      console.error('[DB] Error pushing', path, err);
+      return null;
+    }
   },
   /** Listen for realtime changes; returns unsubscribe function */
   listen(path, callback) {
-    const ref = window.rtdb.ref(path);
-    ref.on('value', snap => callback(snap.val()));
-    return () => ref.off('value');
+    if (!window.rtdb) {
+      console.warn('[DB] RTDB not available for listen:', path);
+      return () => {};
+    }
+    try {
+      const ref = window.rtdb.ref(path);
+      ref.on('value', snap => {
+        try {
+          callback(snap.val());
+        } catch (err) {
+          console.error('[DB] Error in listener callback for', path, err);
+        }
+      }, (err) => {
+        // Handle RTDB errors (permission denied, connection issues, etc)
+        if (err.code === 'PERMISSION_DENIED') {
+          console.warn('[DB] RTDB Permission Denied for path:', path, '- using backend API instead');
+        } else {
+          console.error('[DB] RTDB Error on path', path, err);
+        }
+      });
+      return () => ref.off('value');
+    } catch (err) {
+      console.error('[DB] Error listening to', path, err);
+      return () => {};
+    }
   },
   /** Listen for child_added events (new items); returns unsubscribe */
   listenNew(path, callback) {
-    const ref = window.rtdb.ref(path);
-    ref.on('child_added', snap => callback(snap.key, snap.val()));
-    return () => ref.off('child_added');
+    if (!window.rtdb) {
+      console.warn('[DB] RTDB not available for listenNew:', path);
+      return () => {};
+    }
+    try {
+      const ref = window.rtdb.ref(path);
+      ref.on('child_added', snap => {
+        try {
+          callback(snap.key, snap.val());
+        } catch (err) {
+          console.error('[DB] Error in listener callback for', path, err);
+        }
+      });
+      return () => ref.off('child_added');
+    } catch (err) {
+      console.error('[DB] Error listening to', path, err);
+      return () => {};
+    }
   },
   /** Remove a path */
   async remove(path) {
-    return window.rtdb.ref(path).remove();
+    if (!window.rtdb) {
+      console.warn('[DB] RTDB not available for remove:', path);
+      return null;
+    }
+    try {
+      return window.rtdb.ref(path).remove();
+    } catch (err) {
+      console.error('[DB] Error removing', path, err);
+      return null;
+    }
   },
   /** Get current server timestamp value for writes */
   timestamp() {
-    return firebase.database.ServerValue.TIMESTAMP;
+    if (!window.rtdb) {
+      return new Date().getTime();
+    }
+    try {
+      return firebase.database.ServerValue.TIMESTAMP;
+    } catch (err) {
+      return new Date().getTime();
+    }
   }
 };
 

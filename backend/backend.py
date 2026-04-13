@@ -9,6 +9,22 @@ from io import BytesIO
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
+import logging
+
+# ── Try to import bcrypt (required for password hashing) ──────────
+try:
+    import bcrypt
+except ImportError:
+    print("[WARNING] bcrypt not installed. Install with: pip install bcrypt")
+    bcrypt = None
+
+# ── Configure logging ──────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 import uuid
 import numpy as np
 from PIL import Image
@@ -96,20 +112,66 @@ except Exception as e:
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
+# ── Security hardening imports ────────────────────────────────────
+try:
+    from backend.security_hardening import (
+        rate_limit_login, rate_limit_api, apply_security_headers,
+        InputValidator, RateLimiter, log_auth_event
+    )
+except ImportError:
+    print("[WARNING] security_hardening module not found. Some security features disabled.")
+    rate_limit_login = lambda f: f  # No-op decorator
+    rate_limit_api = lambda **kwargs: lambda f: f  # No-op decorator
+    InputValidator = None
+    log_auth_event = lambda *args, **kwargs: None
+    def apply_security_headers(app): pass
+
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True)
+
+# ── Configure request size limits for large bulk operations ──────────
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max upload
+app.config['JSON_MAX_DEPTH'] = 2000  # Allow deep nested JSON
+
+# ── Configure CORS for production (Firebase Hosting frontend) ──────────
+cors_origins = [
+    "https://smart-ams-project-faa5f.web.app",  # Firebase Hosting
+    "http://localhost:3000",  # Local development
+    "http://localhost:4200",  # Angular dev
+]
+CORS(app, resources={r"/api/*": {"origins": cors_origins}}, supports_credentials=True, 
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+     allow_headers=["Content-Type", "Authorization", "X-Requested-With", "X-Batch-Info"])
+
+# Apply security headers to all responses
+apply_security_headers(app)
+
+# ── CORS Preflight Handler ─────────────────────────────────────
+@app.before_request
+def before_request():
+    """Handle CORS preflight requests and set headers early."""
+    if request.method == 'OPTIONS':
+        response = app.make_default_options_response()
+        response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Max-Age'] = '3600'
+        return response
 
 # ── CORS Error Handler & After-Request Hook ────────────────
 @app.after_request
 def after_request(response):
     """Ensure CORS headers are added to ALL responses, including error responses."""
-    origin = request.headers.get('Origin')
-    # Allow all origins (you can restrict this if needed)
-    if origin:
-        response.headers['Access-Control-Allow-Origin'] = origin
-        response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    origin = request.headers.get('Origin', '*')
+    response.headers['Access-Control-Allow-Origin'] = origin
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+    response.headers['Access-Control-Expose-Headers'] = 'Content-Type'
+    # Prevent caching of API responses
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
     return response
 
 @app.errorhandler(500)
@@ -119,6 +181,16 @@ def handle_500(e):
     import traceback
     traceback.print_exc()
     return jsonify(success=False, error="Internal server error", details=str(e)), 500
+
+@app.errorhandler(404)
+def handle_404(e):
+    """Handle 404 errors."""
+    return jsonify(success=False, error="Endpoint not found"), 404
+
+@app.errorhandler(403)
+def handle_403(e):
+    """Handle 403 errors."""
+    return jsonify(success=False, error="Forbidden"), 403
 
 # ── Firebase Admin SDK ─────────────────────────────────────
 # On Cloud Run the default service account provides credentials automatically.
@@ -150,6 +222,44 @@ try:
     print(f"[FIREBASE] ✓ Admin SDK + RTDB + Firestore initialized (project: {FIREBASE_PROJECT_ID})")
 except Exception as e:
     print(f"[FIREBASE] ⚠ Admin SDK not initialized: {e}")
+
+# ── RBAC & Analytics System ──────────────────────────────────────
+try:
+    from role_based_access_control import (
+        apply_rbac_middleware, 
+        require_role, 
+        require_minimum_role,
+        get_user_scope,
+        get_accessible_students,
+        get_accessible_classes,
+        ROLE_HIERARCHY,
+    )
+    from analytics_rbac import (
+        get_class_wise_analytics,
+        get_subject_wise_analytics,
+        get_student_wise_analytics,
+        get_faculty_performance_analytics,
+        get_at_risk_students,
+        get_daily_report,
+        get_weekly_report,
+        get_monthly_report,
+        get_compliance_report,
+    )
+    from analytics_rbac_routes import register_rbac_analytics_routes
+    print("[RBAC] ✓ Successfully imported RBAC and Analytics modules")
+    RBAC_AVAILABLE = True
+except ImportError as e:
+    print(f"[RBAC] ⚠ Warning: Could not import RBAC modules: {e}")
+    print("[RBAC] Analytics and role-based access control will be unavailable")
+    RBAC_AVAILABLE = False
+
+# ── Initialize RBAC Middleware (after RBAC imports) ──────────────
+if RBAC_AVAILABLE:
+    try:
+        apply_rbac_middleware(app)
+        logger.info("[APP] ✓ RBAC middleware initialized")
+    except Exception as e:
+        logger.warning(f"[APP] Could not initialize RBAC middleware: {e}")
 
 
 def rtdb_set(path: str, data: dict):
@@ -310,7 +420,7 @@ def sync_firebase_user_to_supabase(firebase_uid, email, display_name, role, extr
             "full_name": display_name or email.split("@")[0],
             "role": role or "student",
             "firebase_uid": firebase_uid,
-            "password_hash": hashlib.sha256(firebase_uid.encode()).hexdigest(),
+            "password_hash": _hash_password_secure(firebase_uid),
             "is_active": True,
         }
         if extra:
@@ -337,6 +447,42 @@ def sb_update(table, data, filter_str):
     }
     resp = requests.patch(url, json=data, headers=hdrs)
     resp.raise_for_status()
+
+def _hash_password_secure(password: str) -> str:
+    """
+    Hash password using bcrypt (SECURE)
+    
+    SECURITY: Never use SHA256 or other weak hashes for passwords!
+    """
+    if not password:
+        return None
+    if not bcrypt:
+        logger.error("[SECURITY] bcrypt not available for password hashing")
+        return None
+    try:
+        salt = bcrypt.gensalt(rounds=12)
+        hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
+        return hashed.decode('utf-8')
+    except Exception as e:
+        logger.error(f"[SECURITY] Password hashing error: {e}")
+        return None
+
+
+def _verify_password_secure(password: str, password_hash: str) -> bool:
+    """
+    Verify password against bcrypt hash (SECURE)
+    """
+    if not password_hash:
+        return False
+    if not bcrypt:
+        logger.error("[SECURITY] bcrypt not available for password verification")
+        return False
+    try:
+        return bcrypt.checkpw(password.encode('utf-8'), password_hash.encode('utf-8'))
+    except Exception as e:
+        logger.error(f"[SECURITY] Password verification error: {e}")
+        return False
+
 
 # Paths resolved relative to project root (parent of backend/)
 _PROJECT_ROOT = Path(__file__).parent.parent
@@ -578,6 +724,68 @@ class SimpleSupabaseClient:
 
 
 sb = SimpleSupabaseClient() if SUPABASE_URL and SUPABASE_KEY else None
+
+# ── Firestore Helper Functions ────────────────────────────────────
+# NOTE: Firebase Admin SDK is initialized earlier in the file (lines ~200-226)
+# The _fstore variable is set there and used by these helper functions
+def write_to_firestore(collection, doc_id, data, merge=True):
+    """Write data to Firestore with error handling."""
+    if not _fstore:
+        return False
+    try:
+        _fstore.collection(collection).document(doc_id).set(data, merge=merge)
+        return True
+    except Exception as e:
+        print(f"[FIRESTORE] Error writing to {collection}/{doc_id}: {e}")
+        return False
+
+def add_to_firestore_collection(collection, data):
+    """Add data to Firestore collection (auto-generate doc ID)."""
+    if not _fstore:
+        return None
+    try:
+        ref = _fstore.collection(collection).document()
+        ref.set(data)
+        return ref.id
+    except Exception as e:
+        print(f"[FIRESTORE] Error adding to {collection}: {e}")
+        return None
+
+def delete_from_firestore(collection, doc_id):
+    """Delete document from Firestore."""
+    if not _fstore:
+        return False
+    try:
+        _fstore.collection(collection).document(doc_id).delete()
+        return True
+    except Exception as e:
+        print(f"[FIRESTORE] Error deleting {collection}/{doc_id}: {e}")
+        return False
+
+def sync_batch_to_firestore(operations):
+    """Execute batch write operations to Firestore.
+    
+    Args:
+        operations: List of tuples (action, collection, doc_id, data)
+        where action is 'set', 'update', or 'delete'
+    """
+    if not _fstore:
+        return False
+    try:
+        batch = _fstore.batch()
+        for action, collection, doc_id, data in operations:
+            ref = _fstore.collection(collection).document(doc_id)
+            if action == 'set':
+                batch.set(ref, data, merge=True)
+            elif action == 'update':
+                batch.update(ref, data)
+            elif action == 'delete':
+                batch.delete(ref)
+        batch.commit()
+        return True
+    except Exception as e:
+        print(f"[FIRESTORE] Error in batch operation: {e}")
+        return False
 
 # ── Original functions (unchanged) ──
 def load_encodings():
@@ -940,7 +1148,7 @@ def test_create_student():
         
         test_data = {
             "username": "student001",
-            "password_hash": hashlib.sha256("password123".encode()).hexdigest(),
+            "password_hash": _hash_password_secure("password123"),
             "role": "student",
             "full_name": "Test Student",
             "email": "student@test.com",
@@ -1230,8 +1438,8 @@ def register_and_add_user():
         if not sb:
             return jsonify(success=False, error="Supabase not configured"), 500
 
-        import hashlib
-        pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+        # SECURITY: Use bcrypt for password hashing
+        pwd_hash = _hash_password_secure(password)
 
         # Check duplicate username
         existing_user = sb.table("users").select("id").eq("username", username).execute()
@@ -1260,6 +1468,27 @@ def register_and_add_user():
             result = sb.table("users").insert(user_payload).execute()
             user_id = result.data[0]["id"] if result.data else None
             print(f"[COMBINED] User account created: {username} (id={user_id})")
+            
+            # Sync user to Firestore with matching structure
+            if _fstore and user_id:
+                firestore_data = {
+                    "id": user_id,
+                    "username": username,
+                    "role": role,
+                    "full_name": full_name,
+                    "email": email,
+                    "roll_no": roll_no if role == "student" else None,
+                    "department": department,
+                    "section": section if role == "student" else None,
+                    "created_at": datetime.utcnow().isoformat(),
+                    "synced_at": datetime.utcnow().isoformat()
+                }
+                try:
+                    write_to_firestore("users", str(user_id), firestore_data)
+                    print(f"[FIRESTORE] User synced: {username} (id={user_id})")
+                except Exception as fs_err:
+                    print(f"[FIRESTORE] Warning: Could not sync user: {fs_err}")
+            
         except Exception as e:
             print(f"[SUPABASE] Error inserting user: {e}")
             try:
@@ -1776,8 +2005,8 @@ def user_register():
         if existing.data:
             return jsonify(success=False,error="Username already taken"),400
         
-        import hashlib
-        pwd_hash=hashlib.sha256(password.encode()).hexdigest()
+        # SECURITY: Use bcrypt for password hashing
+        pwd_hash=_hash_password_secure(password)
         
         result=sb.table("users").insert({
             "username":username,
@@ -1974,6 +2203,12 @@ def firebase_login():
     if not user:
         return jsonify(success=False, error="Failed to sync user to database"), 500
 
+    # ── CHECK 1: User must be ACTIVE ────────────────────────────
+    is_active = user.get("is_active", False)
+    if not is_active:
+        print(f"[AUTH-FB] Firebase login rejected: {email} is inactive/archived")
+        return jsonify(success=False, error="Your account is inactive. Contact admin."), 403
+
     # Validate selected role matches actual user role
     actual_role = user.get("role", role)
     if role and actual_role and role != actual_role:
@@ -2044,8 +2279,9 @@ def firebase_login():
 
 
 @app.route("/api/users/login", methods=["POST"])
+@rate_limit_login
 def user_login():
-    """Verify user credentials and optionally handle face/location attendance."""
+    """Verify user credentials and optionally handle face/location attendance. Rate-limited to 5 attempts per 15 minutes."""
     d=request.json
     username=d.get("username","" ).strip()
     password=d.get("password","" )
@@ -2061,9 +2297,7 @@ def user_login():
         return jsonify(success=False, error="Supabase not configured. Login disabled."), 500
 
     try:
-        import hashlib
-        pwd_hash=hashlib.sha256(password.encode()).hexdigest()
-
+        # SECURITY: Verify password using bcrypt checkpw
         result=sb.table("users").select("*").eq("username",username).execute()
 
         # Student: also try roll_no
@@ -2078,15 +2312,21 @@ def user_login():
             return jsonify(success=False,error="User not found"),404
 
         user=result.data[0]
-        if user["password_hash"]!=pwd_hash:
+        if not _verify_password_secure(password, user["password_hash"]):
             return jsonify(success=False,error="Invalid password"),401
+
+        # ── CHECK 1: User must be ACTIVE ────────────────────────────
+        is_active = user.get("is_active", False)
+        if not is_active:
+            print(f"[AUTH] Login rejected: {username} is inactive/archived")
+            return jsonify(success=False, error="Your account is inactive. Contact admin."), 403
 
         # Check if user is suspended (RTDB flag set by admin)
         if _firebase_db_enabled:
             try:
                 rtdb_u = firebase_db.reference(f"/users/{user['id']}").get()
                 if rtdb_u and rtdb_u.get("is_active") is False:
-                    return jsonify(success=False, error="Account suspended. Contact administrator."), 403
+                    return jsonify(success=False, error="Your account is inactive. Contact admin."), 403
             except Exception:
                 pass
 
@@ -2163,23 +2403,109 @@ def user_login():
     except Exception as e:
         return jsonify(success=False,error=str(e)),500
 
+@app.route("/api/init-admin-demo", methods=["POST"])
+def init_admin_demo():
+    """Initialize admin_demo user for first-time setup. One-time use."""
+    try:
+        if not sb:
+            return jsonify(success=False, error="Database not configured"), 500
+        
+        password = "Admin@123"
+        username = "admin_demo"
+        
+        # Delete existing admin_demo if present
+        try:
+            sb.table("users").delete().eq("username", username).execute()
+        except:
+            pass  # Ignore if user doesn't exist
+        
+        # Create new admin_demo with correct hash
+        pwd_hash = _hash_password_secure(password)
+        
+        user_data = {
+            "id": str(__import__('uuid').uuid4()),
+            "username": username,
+            "email": "admin@smartams.demo",
+            "full_name": "Demo Admin",
+            "role": "admin",
+            "password_hash": pwd_hash,
+            "is_active": True,
+            "department": "Administration",
+        }
+        
+        sb.table("users").insert(user_data).execute()
+        
+        return jsonify(
+            success=True, 
+            message="Admin demo user created",
+            username=username,
+            password=password
+        ), 200
+    
+    except Exception as e:
+        logger.error(f"[INIT] Admin demo init error: {e}")
+        return jsonify(success=False, error=str(e)), 500
+
+@app.route("/api/admin/reset-password", methods=["POST"])
+def admin_reset_password():
+    """Admin endpoint to reset a user's password. Can be called with username and new password."""
+    try:
+        d = request.json or {}
+        username = d.get("username", "").strip()
+        new_password = d.get("new_password", "").strip()
+        admin_key = d.get("admin_key", "")
+        
+        # Basic security check
+        if admin_key != os.getenv("ADMIN_RESET_KEY", "smartams-reset-admin-key"):
+            return jsonify(success=False, error="Unauthorized"), 401
+        
+        if not username or not new_password:
+            return jsonify(success=False, error="Missing username or password"), 400
+        
+        if not sb:
+            return jsonify(success=False, error="Database not configured"), 500
+        
+        # Hash the new password
+        pwd_hash = _hash_password_secure(new_password)
+        
+        # Update user
+        result = sb.table("users").update({
+            "password_hash": pwd_hash
+        }).eq("username", username).execute()
+        
+        if result.data:
+            return jsonify(success=True, message=f"Password reset for {username}"), 200
+        else:
+            return jsonify(success=False, error="User not found"), 404
+    
+    except Exception as e:
+        logger.error(f"[ADMIN] Password reset error: {e}")
+        return jsonify(success=False, error=str(e)), 500
+
 @app.route("/api/users/list", methods=["GET"])
 def list_users():
     """Get list of users filtered by role, department, and/or semester."""
+    if not sb:
+        return jsonify(success=True, users=[])
+    
     role       = request.args.get("role")
     department = request.args.get("department")
     semester   = request.args.get("semester")
-
-    if not sb:
-        return jsonify(success=True, users=[])
-
+    is_admin_view = request.args.get("is_admin_view", "0") == "1"
     section = request.args.get("section")
     year    = request.args.get("year")
+    
     try:
         q = sb.table("users").select(
-            "id,username,role,full_name,email,department,roll_no,employee_id,"
+            "id,username,role,full_name,department,roll_no,employee_id,"
             "program,section,designation,subjects,is_active,created_at,year"
         )
+        
+        if is_admin_view:
+            pass  # Show all users
+        else:
+            q = q.eq("is_active", True)  # Show only active users
+        
         if role:
             q = q.eq("role", role)
         if department:
@@ -2272,8 +2598,8 @@ def add_user():
             if sb.table("users").select("id").eq("username", roll_no).execute().data:
                 return jsonify(success=False, error=f"Roll number {roll_no} already exists"), 400
         
-        import hashlib
-        pwd_hash=hashlib.sha256(password.encode()).hexdigest()
+        # SECURITY: Use bcrypt for password hashing
+        pwd_hash=_hash_password_secure(password)
         
         user_payload = {
             "username":    username,
@@ -2617,7 +2943,7 @@ def mark_qr_attendance_enhanced():
                 }).execute()
                 
                 # Also mark attendance
-                sb.table("attendance").insert({
+                attendance_record = {
                     "student_id": student_id,
                     "name": face_name,
                     "roll_no": roll_no,
@@ -2630,7 +2956,35 @@ def mark_qr_attendance_enhanced():
                     "longitude": longitude,
                     "in_campus": location_verified,
                     "qr_session_id": session_id
-                }).execute()
+                }
+                att_result = sb.table("attendance").insert(attendance_record).execute()
+                attendance_id = att_result.data[0]["id"] if att_result.data else None
+                
+                # Sync attendance to Firestore
+                if _fstore and attendance_id:
+                    firestore_att = {
+                        "id": attendance_id,
+                        "student_id": student_id,
+                        "name": face_name,
+                        "roll_no": roll_no,
+                        "course_id": session_data.get("course_id"),
+                        "date": datetime.utcnow().date().isoformat(),
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "method": "qr",
+                        "verified": face_verified,
+                        "face_confidence": face_confidence,
+                        "latitude": latitude,
+                        "longitude": longitude,
+                        "in_campus": location_verified,
+                        "qr_session_id": session_id,
+                        "synced_at": datetime.utcnow().isoformat()
+                    }
+                    try:
+                        write_to_firestore("attendance", str(attendance_id), firestore_att)
+                        print(f"[FIRESTORE] Attendance synced for {roll_no} (id={attendance_id})")
+                    except Exception as fs_err:
+                        print(f"[FIRESTORE] Warning: Could not sync attendance: {fs_err}")
+                
             except Exception as e:
                 print(f"[QR-DB] Error recording attendance: {e}")
         
@@ -3565,48 +3919,139 @@ def update_timetable_entry(entry_id):
 
 @app.route("/api/timetable/<entry_id>", methods=["DELETE"])
 def delete_timetable_entry(entry_id):
+    """Delete timetable entry by archiving it (soft delete).
+    Entry can be restored from archive later."""
     if not sb:
         return jsonify(success=False, error="Supabase not configured"), 500
     try:
+        # Fetch the entry first
+        entry_data = sb.table("timetable").select("*").eq("id", entry_id).execute().data
+        if not entry_data:
+            return jsonify(success=False, error="Entry not found"), 404
+        
+        entry = entry_data[0]
+        
+        # Archive the entry
+        archive_record = {
+            "original_id": entry.get("id"),
+            "faculty_id": entry.get("faculty_id"),
+            "faculty_name": entry.get("faculty_name"),
+            "faculty_username": entry.get("faculty_username"),
+            "batch": entry.get("batch"),
+            "session_type": entry.get("session_type"),
+            "subject": entry.get("subject"),
+            "day_of_week": entry.get("day_of_week"),
+            "hour_number": entry.get("hour_number"),
+            "start_time": entry.get("start_time"),
+            "end_time": entry.get("end_time"),
+            "room_number": entry.get("room_number"),
+            "academic_year": entry.get("academic_year"),
+            "semester": entry.get("semester"),
+            "mode": entry.get("mode"),
+            "deleted_at": datetime.utcnow().isoformat()
+        }
+        
+        sb.table("timetable_archive").insert(archive_record).execute()
+        
+        # Delete from timetable
         sb.table("timetable").delete().eq("id", entry_id).execute()
         rtdb_delete(f"/timetable/{entry_id}")
-        return jsonify(success=True)
+        fstore_delete("timetable", entry_id)
+        
+        return jsonify(success=True, message="Timetable entry archived (can be restored)")
     except Exception as e:
         return jsonify(success=False, error=str(e)), 500
 
 
 @app.route("/api/timetable/delete-all", methods=["DELETE"])
 def delete_all_timetable():
-    """Delete ALL timetable entries — synced to Supabase, RTDB, and Firestore."""
+    """Archive ALL timetable entries (soft delete, can be restored).
+    Synced to Supabase, RTDB, and Firestore."""
     if not sb:
         return jsonify(success=False, error="Supabase not configured"), 500
     try:
-        existing = sb.table("timetable").select("id").execute().data or []
+        # Fetch all timetable entries
+        existing = sb.table("timetable").select("*").execute().data or []
+        print(f"[DELETE-ALL] Found {len(existing)} timetable entries to archive")
+        
+        # Archive each entry
+        archived_count = 0
+        for entry in existing:
+            archive_record = {
+                "original_id": entry.get("id"),
+                "faculty_id": entry.get("faculty_id"),
+                "faculty_name": entry.get("faculty_name"),
+                "faculty_username": entry.get("faculty_username"),
+                "batch": entry.get("batch"),
+                "session_type": entry.get("session_type"),
+                "subject": entry.get("subject"),
+                "day_of_week": entry.get("day_of_week"),
+                "hour_number": entry.get("hour_number"),
+                "start_time": entry.get("start_time"),
+                "end_time": entry.get("end_time"),
+                "room_number": entry.get("room_number"),
+                "academic_year": entry.get("academic_year"),
+                "semester": entry.get("semester"),
+                "mode": entry.get("mode"),
+                "deleted_at": datetime.utcnow().isoformat()
+            }
+            try:
+                sb.table("timetable_archive").insert(archive_record).execute()
+                archived_count += 1
+            except Exception as e:
+                print(f"[WARNING] Failed to archive entry {entry.get('id')}: {e}")
+        
+        print(f"[DELETE-ALL] Successfully archived {archived_count} entries")
+        
+        # Delete all entries from timetable in batches
         ids = [r["id"] for r in existing]
-        # in_() is the only reliable delete filter in this supabase-py version
+        deleted_count = 0
         BATCH = 100
         for i in range(0, max(len(ids), 1), BATCH):
             batch = ids[i:i + BATCH]
             if batch:
-                sb.table("timetable").delete().in_("id", batch).execute()
-        # Mirror to RTDB + Firestore
-        for rid in ids:
-            rtdb_delete(f"/timetable/{rid}")
-            fstore_delete("timetable", rid)
-        # Wipe entire /timetable RTDB node for a clean slate
+                try:
+                    sb.table("timetable").delete().in_("id", batch).execute()
+                    deleted_count += len(batch)
+                except Exception as e:
+                    print(f"[ERROR] Failed to delete batch: {e}")
+                    raise
+        
+        print(f"[DELETE-ALL] Deleted {deleted_count} entries from main table")
+        
+        # Mirror to RTDB + Firestore (skip on error to avoid blocking)
         try:
-            if _firebase_db_enabled:
-                firebase_db.reference("/timetable").delete()
-        except Exception:
-            pass
-        return jsonify(success=True, message=f"Deleted {len(ids)} timetable entries")
+            for rid in ids:
+                try:
+                    rtdb_delete(f"/timetable/{rid}")
+                except Exception as e:
+                    print(f"[WARNING] RTDB delete failed for {rid}: {e}")
+                try:
+                    fstore_delete("timetable", rid)
+                except Exception as e:
+                    print(f"[WARNING] Firestore delete failed for {rid}: {e}")
+            
+            # Wipe entire /timetable RTDB node for a clean slate
+            try:
+                if _firebase_db_enabled:
+                    firebase_db.reference("/timetable").delete()
+            except Exception as e:
+                print(f"[WARNING] Failed to wipe RTDB timetable node: {e}")
+        except Exception as e:
+            print(f"[WARNING] Sync errors occurred: {e}")
+        
+        return jsonify(success=True, message=f"Archived {len(ids)} timetable entries (can be restored)")
     except Exception as e:
+        print(f"[ERROR] delete_all_timetable failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify(success=False, error=str(e)), 500
 
 
 @app.route("/api/timetable/delete-by-faculty", methods=["DELETE"])
 def delete_timetable_by_faculty():
-    """Delete all timetable entries for a faculty — synced to Supabase, RTDB, and Firestore."""
+    """Archive all timetable entries for a faculty (soft delete, can be restored).
+    Synced to Supabase, RTDB, and Firestore."""
     if not sb:
         return jsonify(success=False, error="Supabase not configured"), 500
     d = request.json or {}
@@ -3614,21 +4059,90 @@ def delete_timetable_by_faculty():
     faculty_id       = (d.get("faculty_id")       or "").strip()
     if not faculty_username and not faculty_id:
         return jsonify(success=False, error="faculty_username or faculty_id required"), 400
+    
+    print(f"[DELETE-FACULTY] Deleting timetable for faculty: {faculty_username or faculty_id}")
+    
     try:
-        deleted_ids = []
+        archived_ids = []
+        
+        # Fetch entries to archive
+        entries_to_archive = []
         if faculty_username:
-            rows = sb.table("timetable").select("id").eq("faculty_username", faculty_username).execute().data or []
-            deleted_ids += [r["id"] for r in rows]
-            sb.table("timetable").delete().eq("faculty_username", faculty_username).execute()
+            rows = sb.table("timetable").select("*").eq("faculty_username", faculty_username).execute().data or []
+            entries_to_archive.extend(rows)
         if faculty_id and faculty_id != faculty_username:
-            rows2 = sb.table("timetable").select("id").eq("faculty_id", faculty_id).execute().data or []
-            deleted_ids += [r["id"] for r in rows2]
-            sb.table("timetable").delete().eq("faculty_id", faculty_id).execute()
-        for rid in deleted_ids:
-            rtdb_delete(f"/timetable/{rid}")
-            fstore_delete("timetable", rid)
-        return jsonify(success=True, message="Faculty timetable entries deleted", deleted=len(deleted_ids))
+            rows2 = sb.table("timetable").select("*").eq("faculty_id", faculty_id).execute().data or []
+            entries_to_archive.extend(rows2)
+        
+        print(f"[DELETE-FACULTY] Found {len(entries_to_archive)} entries to archive")
+        
+        # Archive entries
+        archived_count = 0
+        for entry in entries_to_archive:
+            try:
+                archive_record = {
+                    "original_id": entry.get("id"),
+                    "faculty_id": entry.get("faculty_id"),
+                    "faculty_name": entry.get("faculty_name"),
+                    "faculty_username": entry.get("faculty_username"),
+                    "batch": entry.get("batch"),
+                    "session_type": entry.get("session_type"),
+                    "subject": entry.get("subject"),
+                    "day_of_week": entry.get("day_of_week"),
+                    "hour_number": entry.get("hour_number"),
+                    "start_time": entry.get("start_time"),
+                    "end_time": entry.get("end_time"),
+                    "room_number": entry.get("room_number"),
+                    "academic_year": entry.get("academic_year"),
+                    "semester": entry.get("semester"),
+                    "mode": entry.get("mode"),
+                    "deleted_at": datetime.utcnow().isoformat(),
+                    "deletion_reason": "Faculty timetable archival"
+                }
+                sb.table("timetable_archive").insert(archive_record).execute()
+                archived_ids.append(entry.get("id"))
+                archived_count += 1
+            except Exception as e:
+                print(f"[WARNING] Failed to archive entry {entry.get('id')}: {e}")
+        
+        print(f"[DELETE-FACULTY] Successfully archived {archived_count} entries")
+        
+        # Delete from main table in batches
+        deleted_count = 0
+        BATCH = 100
+        if faculty_username:
+            try:
+                sb.table("timetable").delete().eq("faculty_username", faculty_username).execute()
+            except Exception as e:
+                print(f"[ERROR] Failed to delete faculty timetable by username: {e}")
+                raise
+        if faculty_id and faculty_id != faculty_username:
+            try:
+                sb.table("timetable").delete().eq("faculty_id", faculty_id).execute()
+            except Exception as e:
+                print(f"[ERROR] Failed to delete faculty timetable by ID: {e}")
+                raise
+        
+        # Sync deletion to RTDB and Firestore (skip on error to not block)
+        try:
+            for rid in archived_ids:
+                try:
+                    rtdb_delete(f"/timetable/{rid}")
+                except Exception as e:
+                    print(f"[WARNING] RTDB delete failed for {rid}: {e}")
+                try:
+                    fstore_delete("timetable", rid)
+                except Exception as e:
+                    print(f"[WARNING] Firestore delete failed for {rid}: {e}")
+        except Exception as e:
+            print(f"[WARNING] Sync errors occurred: {e}")
+        
+        print(f"[SUCCESS] Moved {len(archived_ids)} faculty timetable entries to archive")
+        return jsonify(success=True, message="Faculty timetable entries archived (can be restored)", archived=len(archived_ids))
     except Exception as e:
+        print(f"[ERROR] Delete_timetable_by_faculty failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify(success=False, error=str(e)), 500
 
 
@@ -3644,52 +4158,84 @@ def delete_timetable_bulk():
     if not ids:
         return jsonify(success=False, error="ids array is required"), 400
     
+    print(f"[DELETE-TIMETABLE] Attempting to delete {len(ids)} timetable entries")
+    
     try:
         # 1. Fetch all records to be deleted
         timetable_records = sb.table("timetable").select("*").in_("id", ids).execute().data or []
+        print(f"[DELETE-TIMETABLE] Found {len(timetable_records)} entries to archive")
         
+        archived_count = 0
         # 2. Move to archive table
         for record in timetable_records:
-            archive_record = {
-                "original_id": record.get("id"),
-                "faculty_id": record.get("faculty_id"),
-                "faculty_name": record.get("faculty_name"),
-                "faculty_username": record.get("faculty_username"),
-                "batch": record.get("batch"),
-                "session_type": record.get("session_type"),
-                "subject": record.get("subject"),
-                "day_of_week": record.get("day_of_week"),
-                "hour_number": record.get("hour_number"),
-                "start_time": record.get("start_time"),
-                "end_time": record.get("end_time"),
-                "room_number": record.get("room_number"),
-                "academic_year": record.get("academic_year"),
-                "semester": record.get("semester"),
-                "mode": record.get("mode"),
-                "created_at": record.get("created_at"),
-                "updated_at": record.get("updated_at"),
-                "deletion_reason": d.get("reason", "Admin deletion")
-            }
-            sb.table("timetable_archive").insert(archive_record).execute()
+            try:
+                archive_record = {
+                    "original_id": record.get("id"),
+                    "faculty_id": record.get("faculty_id"),
+                    "faculty_name": record.get("faculty_name"),
+                    "faculty_username": record.get("faculty_username"),
+                    "batch": record.get("batch"),
+                    "session_type": record.get("session_type"),
+                    "subject": record.get("subject"),
+                    "day_of_week": record.get("day_of_week"),
+                    "hour_number": record.get("hour_number"),
+                    "start_time": record.get("start_time"),
+                    "end_time": record.get("end_time"),
+                    "room_number": record.get("room_number"),
+                    "academic_year": record.get("academic_year"),
+                    "semester": record.get("semester"),
+                    "mode": record.get("mode"),
+                    "deleted_at": datetime.utcnow().isoformat(),
+                    "deletion_reason": d.get("reason", "Admin deletion")
+                }
+                sb.table("timetable_archive").insert(archive_record).execute()
+                archived_count += 1
+            except Exception as e:
+                print(f"[WARNING] Failed to archive entry {record.get('id')}: {e}")
         
-        # 3. Hard delete from main table
-        sb.table("timetable").delete().in_("id", ids).execute()
+        print(f"[DELETE-TIMETABLE] Successfully archived {archived_count} entries")
         
-        # 4. Sync deletion to RTDB and Firestore
-        for rid in ids:
-            rtdb_delete(f"/timetable/{rid}")
-            fstore_delete("timetable", rid)
+        # 3. Hard delete from main table in batches
+        deleted_count = 0
+        BATCH = 100
+        for i in range(0, len(ids), BATCH):
+            batch = ids[i:i + BATCH]
+            try:
+                sb.table("timetable").delete().in_("id", batch).execute()
+                deleted_count += len(batch)
+            except Exception as e:
+                print(f"[ERROR] Failed to delete batch of timetable entries: {e}")
+                raise
         
-        print(f"[SOFT-DELETE] Moved {len(ids)} timetable entries to archive")
-        return jsonify(success=True, archived=len(ids), message="Timetable entries moved to archive")
+        print(f"[DELETE-TIMETABLE] Deleted {deleted_count} entries from main table")
+        
+        # 4. Sync deletion to RTDB and Firestore (skip on error to not block)
+        try:
+            for rid in ids:
+                try:
+                    rtdb_delete(f"/timetable/{rid}")
+                except Exception as e:
+                    print(f"[WARNING] RTDB delete failed for {rid}: {e}")
+                try:
+                    fstore_delete("timetable", rid)
+                except Exception as e:
+                    print(f"[WARNING] Firestore delete failed for {rid}: {e}")
+        except Exception as e:
+            print(f"[WARNING] Sync errors occurred: {e}")
+        
+        print(f"[SUCCESS] Moved {len(ids)} timetable entries to archive")
+        return jsonify(success=True, archived=len(ids), message=f"Archived {archived_count} timetable entries")
     except Exception as e:
         print(f"[ERROR] Timetable soft-delete failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify(success=False, error=str(e)), 500
 
 
 @app.route("/api/users/delete-bulk", methods=["DELETE"])
 def delete_users_bulk():
     """Soft-delete users (move to archive table instead of hard deleting).
+    Optimized for batch sizes up to 4000+ users.
     Body: { user_ids: [...], reason: "optional reason" }
     """
     if not sb:
@@ -3697,60 +4243,176 @@ def delete_users_bulk():
     d = request.json or {}
     ids = [str(i).strip() for i in (d.get("user_ids") or d.get("ids") or []) if str(i).strip()]
     if not ids:
+        print(f"[DELETE-USERS] Error: No user_ids provided")
         return jsonify(success=False, error="user_ids array is required"), 400
     
+    print(f"[DELETE-USERS] Starting bulk delete for {len(ids)} users")
+    start_time = datetime.utcnow()
+    
     try:
-        # 1. Fetch all users to be deleted
-        user_records = sb.table("users").select("*").in_("id", ids).execute().data or []
+        # 1. Fetch ALL users in ONE query (much faster than one-by-one)
+        user_records = []
+        archived_count = 0
+        deleted_count = 0
         
-        # 2. Move to archive table
-        for user in user_records:
-            archive_user = {
-                "original_id": user.get("id"),
-                "username": user.get("username"),
-                "email": user.get("email"),
-                "password_hash": user.get("password_hash"),
-                "full_name": user.get("full_name"),
-                "role": user.get("role"),
-                "roll_no": user.get("roll_no"),
-                "program": user.get("program"),
-                "section": user.get("section"),
-                "year": user.get("year"),
-                "semester": user.get("semester"),
-                "employee_id": user.get("employee_id"),
-                "designation": user.get("designation"),
-                "subjects": user.get("subjects"),
-                "department": user.get("department"),
-                "phone": user.get("phone"),
-                "firebase_uid": user.get("firebase_uid"),
-                "is_active": user.get("is_active"),
-                "created_at": user.get("created_at"),
-                "updated_at": user.get("updated_at"),
-                "last_login": user.get("last_login"),
-                "deletion_reason": d.get("reason", "Admin deletion")
-            }
-            sb.table("users_archive").insert(archive_user).execute()
+        try:
+            # Build query to fetch all users at once - Supabase supports filtering by ID array
+            # Use PostgreSQL IN operator for batch fetch
+            print(f"[DELETE-USERS] Fetching {len(ids)} users from database...")
+            result = sb.table("users").select("*").in_("id", ids).execute()
+            user_records = result.data if result.data else []
+            print(f"[DELETE-USERS] Fetched {len(user_records)} users for archiving")
+        except Exception as e:
+            print(f"[DELETE-USERS] Fetch failed: {e}")
+            # Fallback: fetch in smaller chunks
+            fetch_chunk_size = 50
+            for chunk_idx in range(0, len(ids), fetch_chunk_size):
+                chunk = ids[chunk_idx:chunk_idx + fetch_chunk_size]
+                try:
+                    result = sb.table("users").select("*").in_("id", chunk).execute()
+                    user_records.extend(result.data if result.data else [])
+                except Exception as e2:
+                    print(f"[DELETE-USERS] Warning: Fetch chunk {chunk_idx//fetch_chunk_size} failed: {e2}")
+        
+        print(f"[DELETE-USERS] Found {len(user_records)} users to archive")
+        
+        # 2. Archive users in batches (faster than one-by-one)
+        archive_batch_size = 100
+        for batch_idx in range(0, len(user_records), archive_batch_size):
+            batch = user_records[batch_idx:batch_idx + archive_batch_size]
             
-            # Also delete face encodings
             try:
-                roll_no = user.get("roll_no")
-                if roll_no:
-                    sb.table("face_encodings").delete().eq("roll_no", roll_no).execute()
-            except Exception:
-                pass
+                # Build archive records for this batch
+                archive_records = []
+                for user in batch:
+                    archive_user = {
+                        "original_id": user.get("id"),
+                        "username": user.get("username"),
+                        "email": user.get("email"),
+                        "password_hash": user.get("password_hash"),
+                        "full_name": user.get("full_name"),
+                        "role": user.get("role"),
+                        "roll_no": user.get("roll_no"),
+                        "program": user.get("program"),
+                        "section": user.get("section"),
+                        "year": user.get("year"),
+                        "semester": user.get("semester"),
+                        "employee_id": user.get("employee_id"),
+                        "designation": user.get("designation"),
+                        "subjects": user.get("subjects"),
+                        "department": user.get("department"),
+                        "phone": user.get("phone"),
+                        "firebase_uid": user.get("firebase_uid"),
+                        "is_active": user.get("is_active"),
+                        "created_at": user.get("created_at"),
+                        "updated_at": user.get("updated_at"),
+                        "last_login": user.get("last_login"),
+                        "deletion_reason": d.get("reason", "Admin deletion"),
+                        "deleted_at": datetime.utcnow().isoformat()
+                    }
+                    archive_records.append(archive_user)
+                
+                # Insert batch to archive (Supabase supports batch inserts)
+                if archive_records:
+                    try:
+                        sb.table("users_archive").insert(archive_records).execute()
+                        archived_count += len(archive_records)
+                    except Exception as e:
+                        print(f"[DELETE-USERS] Warning: Batch insert to archive failed: {e}")
+                        # Fallback: insert one by one
+                        for rec in archive_records:
+                            try:
+                                sb.table("users_archive").insert(rec).execute()
+                                archived_count += 1
+                            except Exception as e2:
+                                print(f"[WARNING] Failed to archive single user: {e2}")
+            except Exception as e:
+                print(f"[DELETE-USERS] Warning: Archive batch {batch_idx//archive_batch_size} failed: {e}")
         
-        # 3. Hard delete from main users table
-        sb.table("users").delete().in_("id", ids).execute()
+        print(f"[DELETE-USERS] Successfully archived {archived_count} users in {(datetime.utcnow() - start_time).total_seconds():.2f}s")
         
-        # 4. Sync deletion to RTDB and Firestore
-        for uid in ids:
-            rtdb_delete(f"/users/{uid}")
-            fstore_delete("users", uid)
+        # 3. Delete from main table - use batch operation for speed
+        print(f"[DELETE-USERS] Deleting {len(ids)} users from main table...")
+        delete_batch_size = 100
         
-        print(f"[SOFT-DELETE] Moved {len(ids)} users to archive")
-        return jsonify(success=True, archived=len(ids), message="Users moved to archive")
+        # Collect roll_nos for face_encoding deletion BEFORE deleting users
+        roll_nos_to_delete = [u.get("roll_no") for u in user_records if u.get("roll_no")]
+        
+        try:
+            # Delete users in chunks using IN operator
+            for batch_idx in range(0, len(ids), delete_batch_size):
+                batch = ids[batch_idx:batch_idx + delete_batch_size]
+                try:
+                    # Use .in_() for efficient batch delete
+                    sb.table("users").delete().in_("id", batch).execute()
+                    deleted_count += len(batch)
+                except Exception as e:
+                    print(f"[DELETE-USERS] Warning: Batch delete failed: {e}")
+                    # Fallback: delete one-by-one if batch fails
+                    for user_id in batch:
+                        try:
+                            sb.table("users").delete().eq("id", user_id).execute()
+                            deleted_count += 1
+                        except Exception as e2:
+                            print(f"[WARNING] Failed to delete user {user_id}: {e2}")
+        except Exception as e:
+            print(f"[DELETE-USERS] Delete phase error: {e}")
+        
+        print(f"[DELETE-USERS] Deleted {deleted_count} users from main table in {(datetime.utcnow() - start_time).total_seconds():.2f}s")
+        
+        # 3b. Delete face encodings for deleted users (using roll_nos collected earlier)
+        if roll_nos_to_delete:
+            try:
+                print(f"[DELETE-USERS] Cleaning up {len(roll_nos_to_delete)} face encoding records...")
+                for roll_no in roll_nos_to_delete:
+                    try:
+                        # Delete face encodings by roll_no
+                        sb.table("face_encodings").delete().eq("roll_no", roll_no).execute()
+                    except Exception as e:
+                        print(f"[WARNING] Failed to delete face encodings for roll_no {roll_no}: {e}")
+            except Exception as e:
+                print(f"[DELETE-USERS] Face encoding cleanup error: {e}")
+        
+        elapsed = (datetime.utcnow() - start_time).total_seconds()
+        print(f"[SUCCESS] Deleted {deleted_count} users from main table, archived {archived_count} in {elapsed:.2f}s")
+        
+        # 4. Return success immediately, sync to Firebase asynchronously
+        response = jsonify(
+            success=True, 
+            archived=archived_count,
+            deleted=deleted_count,
+            message=f"Successfully archived {archived_count} and deleted {deleted_count} users"
+        )
+        
+        # Async Firebase sync to not block the response
+        try:
+            import threading
+            def async_firebase_sync():
+                try:
+                    for uid in ids:
+                        try:
+                            rtdb_delete(f"/users/{uid}")
+                        except Exception as e:
+                            print(f"[WARNING] RTDB delete failed for user {uid}: {e}")
+                        try:
+                            fstore_delete("users", uid)
+                        except Exception as e:
+                            print(f"[WARNING] Firestore delete failed for user {uid}: {e}")
+                    print(f"[ASYNC] Firebase sync completed for {len(ids)} users")
+                except Exception as e:
+                    print(f"[ASYNC] Firebase sync error: {e}")
+            
+            # Start async thread without blocking response
+            sync_thread = threading.Thread(target=async_firebase_sync, daemon=True)
+            sync_thread.start()
+        except Exception as e:
+            print(f"[WARNING] Could not start async Firebase sync: {e}")
+        
+        return response
     except Exception as e:
         print(f"[ERROR] User soft-delete failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify(success=False, error=str(e)), 500
 
 
@@ -3760,9 +4422,19 @@ def delete_users_bulk():
 
 @app.route("/api/archive/users", methods=["GET"])
 def get_archived_users():
-    """Retrieve all archived users. Query params: limit, offset"""
+    """Retrieve all archived users.
+    ⚠️ ADMIN ONLY: Only Super Admin can access this endpoint.
+    Query params: limit, offset, admin_role (required)
+    """
     if not sb:
         return jsonify(success=False, error="Supabase not configured"), 500
+    
+    # ── ACCESS CONTROL: Only Super Admin can see archived users ────
+    admin_role = request.args.get("admin_role", "").strip()
+    if admin_role != "super_admin":
+        print(f"[AUDIT] Unauthorized archive access attempt with role: {admin_role}")
+        return jsonify(success=False, error="Only Super Admin can access archived users"), 403
+    
     try:
         limit = int(request.args.get("limit", 100))
         offset = int(request.args.get("offset", 0))
@@ -3771,6 +4443,7 @@ def get_archived_users():
         total_count = sb.table("users_archive").select("id", count="exact").execute()
         total = total_count.count if hasattr(total_count, 'count') else len(archived)
         
+        print(f"[AUDIT] Super Admin accessed {len(archived)} archived users")
         return jsonify(success=True, archived_users=archived, total=total, limit=limit, offset=offset)
     except Exception as e:
         return jsonify(success=False, error=str(e)), 500
@@ -3778,9 +4451,19 @@ def get_archived_users():
 
 @app.route("/api/archive/timetable", methods=["GET"])
 def get_archived_timetable():
-    """Retrieve all archived timetable entries. Query params: limit, offset"""
+    """Retrieve all archived timetable entries.
+    ⚠️ ADMIN ONLY: Only Super Admin can access this endpoint.
+    Query params: limit, offset, admin_role (required)
+    """
     if not sb:
         return jsonify(success=False, error="Supabase not configured"), 500
+    
+    # ── ACCESS CONTROL: Only Super Admin can see archived timetable ────
+    admin_role = request.args.get("admin_role", "").strip()
+    if admin_role != "super_admin":
+        print(f"[AUDIT] Unauthorized timetable archive access attempt with role: {admin_role}")
+        return jsonify(success=False, error="Only Super Admin can access archived timetable"), 403
+    
     try:
         limit = int(request.args.get("limit", 100))
         offset = int(request.args.get("offset", 0))
@@ -3789,23 +4472,148 @@ def get_archived_timetable():
         total_count = sb.table("timetable_archive").select("id", count="exact").execute()
         total = total_count.count if hasattr(total_count, 'count') else len(archived)
         
+        print(f"[AUDIT] Super Admin accessed {len(archived)} archived timetable entries")
         return jsonify(success=True, archived_timetable=archived, total=total, limit=limit, offset=offset)
     except Exception as e:
+        return jsonify(success=False, error=str(e)), 500
+
+
+@app.route("/api/users/archive-bulk", methods=["POST"])
+def archive_users_bulk():
+    """Archive multiple users (move to users_archive table).
+    Optimized for batches up to 4000+ users.
+    Body: { user_ids: [...] }
+    """
+    if not sb:
+        return jsonify(success=False, error="Supabase not configured"), 500
+    d = request.json or {}
+    ids = [str(i).strip() for i in (d.get("user_ids") or d.get("ids") or []) if str(i).strip()]
+    if not ids:
+        print(f"[ARCHIVE-BULK] Error: No user_ids provided")
+        return jsonify(success=False, error="user_ids array is required"), 400
+    
+    print(f"[ARCHIVE-BULK] Starting archive for {len(ids)} users")
+    start_time = datetime.utcnow()
+    
+    try:
+        archived_count = 0
+        deleted_count = 0
+        user_records = []
+        
+        # 1. Fetch all users - do in chunks
+        fetch_chunk_size = 100
+        for chunk_idx in range(0, len(ids), fetch_chunk_size):
+            chunk = ids[chunk_idx:chunk_idx + fetch_chunk_size]
+            for user_id in chunk:
+                try:
+                    result = sb.table("users").select("*").eq("id", user_id).execute()
+                    if result.data:
+                        user_records.extend(result.data)
+                except Exception as e:
+                    print(f"[ARCHIVE-BULK] Warning: Could not fetch user {user_id}: {e}")
+        
+        print(f"[ARCHIVE-BULK] Found {len(user_records)} users to archive")
+        
+        # 2. Archive in batches (batch inserts are faster)
+        archive_batch_size = 100
+        for batch_idx in range(0, len(user_records), archive_batch_size):
+            batch = user_records[batch_idx:batch_idx + archive_batch_size]
+            
+            try:
+                archive_records = []
+                for user in batch:
+                    archive_user = {
+                        "original_id": user.get("id"),
+                        "username": user.get("username"),
+                        "email": user.get("email"),
+                        "password_hash": user.get("password_hash"),
+                        "full_name": user.get("full_name"),
+                        "role": user.get("role"),
+                        "roll_no": user.get("roll_no"),
+                        "program": user.get("program"),
+                        "section": user.get("section"),
+                        "year": user.get("year"),
+                        "semester": user.get("semester"),
+                        "employee_id": user.get("employee_id"),
+                        "designation": user.get("designation"),
+                        "subjects": user.get("subjects"),
+                        "department": user.get("department"),
+                        "phone": user.get("phone"),
+                        "firebase_uid": user.get("firebase_uid"),
+                        "is_active": user.get("is_active"),
+                        "created_at": user.get("created_at"),
+                        "updated_at": user.get("updated_at"),
+                        "last_login": user.get("last_login"),
+                        "deleted_at": datetime.utcnow().isoformat()
+                    }
+                    archive_records.append(archive_user)
+                
+                # Batch insert to archive
+                if archive_records:
+                    try:
+                        sb.table("users_archive").insert(archive_records).execute()
+                        archived_count += len(archive_records)
+                    except Exception as e:
+                        print(f"[ARCHIVE-BULK] Warning: Batch insert failed: {e}")
+                        # Fallback to one-by-one
+                        for rec in archive_records:
+                            try:
+                                sb.table("users_archive").insert(rec).execute()
+                                archived_count += 1
+                            except Exception as e2:
+                                print(f"[WARNING] Failed to archive single user: {e2}")
+            except Exception as e:
+                print(f"[ARCHIVE-BULK] Warning: Archive batch {batch_idx//archive_batch_size} failed: {e}")
+        
+        print(f"[ARCHIVE-BULK] Successfully archived {archived_count} users")
+        
+        # 3. Delete from main table in batches
+        delete_batch_size = 100
+        for batch_idx in range(0, len(ids), delete_batch_size):
+            batch = ids[batch_idx:batch_idx + delete_batch_size]
+            for user_id in batch:
+                try:
+                    sb.table("users").delete().eq("id", user_id).execute()
+                    deleted_count += 1
+                except Exception as e:
+                    print(f"[ARCHIVE-BULK] Warning: Failed to delete user {user_id}: {e}")
+        
+        elapsed = (datetime.utcnow() - start_time).total_seconds()
+        print(f"[ARCHIVE-BULK] Completed in {elapsed:.2f}s - Archived: {archived_count}, Deleted: {deleted_count}")
+        
+        return jsonify(
+            success=True,
+            archived=archived_count,
+            deleted=deleted_count,
+            message=f"Successfully archived {archived_count} users"
+        )
+    except Exception as e:
+        print(f"[ERROR] Bulk archive failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify(success=False, error=str(e)), 500
 
 
 @app.route("/api/archive/users/restore", methods=["POST"])
 def restore_archived_user():
     """Restore an archived user back to active users table.
-    Body: { archive_id: "uuid" }
+    ⚠️ ADMIN ONLY: Only Super Admin can restore users.
+    Body: { archive_id: "uuid", admin_role: "super_admin" }
     """
     if not sb:
         return jsonify(success=False, error="Supabase not configured"), 500
     
     d = request.json or {}
     archive_id = d.get("archive_id", "").strip()
+    admin_role = d.get("admin_role", "").strip()
+    
     if not archive_id:
         return jsonify(success=False, error="archive_id is required"), 400
+    
+    # ── ACCESS CONTROL: Only Super Admin can restore users ────
+    if admin_role != "super_admin":
+        print(f"[AUDIT] Unauthorized user restore attempt with role: {admin_role}")
+        return jsonify(success=False, error="Only Super Admin can restore archived users"), 403
     
     try:
         # Get archived user
@@ -3846,6 +4654,7 @@ def restore_archived_user():
             # Remove from archive
             sb.table("users_archive").delete().eq("id", archive_id).execute()
             
+            print(f"[AUDIT] Super Admin restored user: {user.get('username')} (new_id: {restored_id})")
             return jsonify(success=True, message="User restored successfully", new_id=restored_id)
         else:
             return jsonify(success=False, error="Failed to restore user"), 500
@@ -3856,18 +4665,30 @@ def restore_archived_user():
 @app.route("/api/archive/users/purge", methods=["DELETE"])
 def purge_archived_user():
     """Permanently delete an archived user (cannot be restored).
-    Body: { archive_id: "uuid" }
+    ⚠️ ADMIN ONLY: Only Super Admin can permanently purge users.
+    Body: { archive_id: "uuid", admin_role: "super_admin" }
     """
     if not sb:
         return jsonify(success=False, error="Supabase not configured"), 500
     
     d = request.json or {}
     archive_id = d.get("archive_id", "").strip()
+    admin_role = d.get("admin_role", "").strip()
+    
     if not archive_id:
         return jsonify(success=False, error="archive_id is required"), 400
     
+    # ── ACCESS CONTROL: Only Super Admin can purge users ────
+    if admin_role != "super_admin":
+        print(f"[AUDIT] Unauthorized user purge attempt with role: {admin_role}")
+        return jsonify(success=False, error="Only Super Admin can permanently delete archived users"), 403
+    
     try:
+        archived_user = sb.table("users_archive").select("username").eq("id", archive_id).execute().data
         sb.table("users_archive").delete().eq("id", archive_id).execute()
+        
+        username = archived_user[0].get("username") if archived_user else "unknown"
+        print(f"[AUDIT] Super Admin permanently purged archived user: {username}")
         return jsonify(success=True, message="Archived user purged permanently")
     except Exception as e:
         return jsonify(success=False, error=str(e)), 500
@@ -3876,15 +4697,23 @@ def purge_archived_user():
 @app.route("/api/archive/timetable/restore", methods=["POST"])
 def restore_archived_timetable():
     """Restore an archived timetable entry back to active timetable.
-    Body: { archive_id: "uuid" }
+    ⚠️ ADMIN ONLY: Only Super Admin can restore timetable entries.
+    Body: { archive_id: "uuid", admin_role: "super_admin" }
     """
     if not sb:
         return jsonify(success=False, error="Supabase not configured"), 500
     
     d = request.json or {}
     archive_id = d.get("archive_id", "").strip()
+    admin_role = d.get("admin_role", "").strip()
+    
     if not archive_id:
         return jsonify(success=False, error="archive_id is required"), 400
+    
+    # ── ACCESS CONTROL: Only Super Admin can restore timetable ────
+    if admin_role != "super_admin":
+        print(f"[AUDIT] Unauthorized timetable restore attempt with role: {admin_role}")
+        return jsonify(success=False, error="Only Super Admin can restore timetable entries"), 403
     
     try:
         # Get archived timetable entry
@@ -3922,6 +4751,7 @@ def restore_archived_timetable():
             # Remove from archive
             sb.table("timetable_archive").delete().eq("id", archive_id).execute()
             
+            print(f"[AUDIT] Super Admin restored timetable entry: {entry.get('subject')} (new_id: {restored_id})")
             return jsonify(success=True, message="Timetable entry restored successfully", new_id=restored_id)
         else:
             return jsonify(success=False, error="Failed to restore timetable entry"), 500
@@ -3932,18 +4762,30 @@ def restore_archived_timetable():
 @app.route("/api/archive/timetable/purge", methods=["DELETE"])
 def purge_archived_timetable():
     """Permanently delete an archived timetable entry (cannot be restored).
-    Body: { archive_id: "uuid" }
+    ⚠️ ADMIN ONLY: Only Super Admin can permanently purge timetable entries.
+    Body: { archive_id: "uuid", admin_role: "super_admin" }
     """
     if not sb:
         return jsonify(success=False, error="Supabase not configured"), 500
     
     d = request.json or {}
     archive_id = d.get("archive_id", "").strip()
+    admin_role = d.get("admin_role", "").strip()
+    
     if not archive_id:
         return jsonify(success=False, error="archive_id is required"), 400
     
+    # ── ACCESS CONTROL: Only Super Admin can purge timetable ────
+    if admin_role != "super_admin":
+        print(f"[AUDIT] Unauthorized timetable purge attempt with role: {admin_role}")
+        return jsonify(success=False, error="Only Super Admin can permanently delete timetable entries"), 403
+    
     try:
+        archived_entry = sb.table("timetable_archive").select("subject").eq("id", archive_id).execute().data
         sb.table("timetable_archive").delete().eq("id", archive_id).execute()
+        
+        subject = archived_entry[0].get("subject") if archived_entry else "unknown"
+        print(f"[AUDIT] Super Admin permanently purged archived timetable entry: {subject}")
         return jsonify(success=True, message="Archived timetable entry purged permanently")
     except Exception as e:
         return jsonify(success=False, error=str(e)), 500
@@ -5010,6 +5852,7 @@ def delete_department(dept_id):
 # Body: { users: [ {role, full_name, username, email, password,
 #                   department, program, section, roll_no,
 #                   employee_id, designation, subjects} ] }
+# FLEXIBLE: Auto-maps common column name variations
 @app.route("/api/users/bulk-import", methods=["POST"])
 def bulk_import_users():
     if not sb:
@@ -5019,61 +5862,143 @@ def bulk_import_users():
     if not users:
         return jsonify(success=False, error="No users provided"), 400
 
-    import hashlib
+    import hashlib, re
     created, failed = [], []
-    faculty_dept_counters = {}  # track auto-generated emp_id counts per dept within this batch
-    for u in users:
+    faculty_dept_counters = {}
+    
+    def _normalize_field(user_dict, *keys):
+        """Try multiple key variations to extract a field value"""
+        for key in keys:
+            val = user_dict.get(key, "")
+            if val and isinstance(val, str):
+                return val.strip()
+        return ""
+    
+    def _is_valid_email(email):
+        """Check if string looks like email"""
+        return "@" in email and "." in email.split("@")[-1]
+    
+    def _extract_username_from_email(email):
+        """Extract username part from email (before @)"""
+        if "@" in email:
+            return email.split("@")[0]
+        return email
+    
+    for idx, u in enumerate(users):
         try:
-            username = (u.get("username") or u.get("roll_no") or "").strip()
-            role = u.get("role", "student").strip()
+            # ── Auto-detect and map field variations ──
+            title = _normalize_field(u, "title", "prefix", "salutation")
+            full_name = _normalize_field(u, "full_name", "name", "employee_name", "faculty_name", "student_name")
+            email = _normalize_field(u, "email", "email_id", "email_address")
+            username = _normalize_field(u, "username", "user_id", "login_id")
+            roll_no = _normalize_field(u, "roll_no", "roll_number", "student_id", "reg_no")
+            emp_id = _normalize_field(u, "employee_id", "emp_id", "faculty_id")
+            department = _normalize_field(u, "department", "dept", "faculty_department")
+            program = _normalize_field(u, "program", "course", "degree")
+            section = _normalize_field(u, "section", "batch", "class")
+            designation = _normalize_field(u, "designation", "position", "title_role")
+            role = _normalize_field(u, "role", "user_role", "account_type")
+            semester = _normalize_field(u, "semester", "sem", "year")
+            subjects = _normalize_field(u, "subjects", "courses", "papers")
+            password = _normalize_field(u, "password")
+            
+            # ── Sanitize data ──
+            # Remove titles from full_name if accidentally included
+            if full_name and title and title in ("Mr.", "Ms.", "Dr.", "Prof."):
+                full_name = full_name.replace(title, "").strip()
+            
+            # If username is empty, try to extract from email
+            if not username and email and _is_valid_email(email):
+                username = _extract_username_from_email(email)
+            
+            # If still no username, try roll_no or emp_id
+            if not username:
+                username = roll_no or emp_id or ""
+            
+            # Determine role based on available fields
+            if not role:
+                if emp_id or designation or (email and "faculty" in email.lower()):
+                    role = "faculty"
+                elif roll_no or semester:
+                    role = "student"
+                else:
+                    role = "student"  # default
+            
+            role = role.lower().strip()
+            
+            # Strict role validation
             if not role or role not in ("student", "faculty", "admin"):
-                failed.append({"username": username, "error": "Invalid data"})
+                failed.append({
+                    "username": username or email or f"row_{idx}",
+                    "error": f"Invalid role '{role}'. Must be: student, faculty, or admin"
+                })
                 continue
-
-            # For faculty: auto-generate employee_id if missing, then force username = employee_id
+            
+            # Validate username is not empty, not titles, not just titles
+            if not username or username in ("Mr.", "Ms.", "Dr.", "Prof.", "faculty", ""):
+                failed.append({
+                    "username": email or f"row_{idx}",
+                    "error": "Missing valid username. Provide: username, roll_no, employee_id, or email"
+                })
+                continue
+            
+            # For faculty: auto-generate employee_id if missing
             if role == "faculty":
-                emp_id = (u.get("employee_id") or "").strip()
                 if not emp_id:
-                    dept = (u.get("department") or "").strip()
+                    dept = department or "General"
                     offset = faculty_dept_counters.get(dept, 0)
                     emp_id = _generate_faculty_emp_id(dept, sb, extra_offset=offset)
                     faculty_dept_counters[dept] = faculty_dept_counters.get(dept, 0) + 1
-                username = emp_id  # username always equals employee_id for faculty
-                u["employee_id"] = emp_id
-
-            if not username:
-                failed.append({"username": "?", "error": "Invalid data"})
-                continue
+                username = emp_id  # faculty username = employee_id
+            
+            # For students: must have semester
+            if role == "student":
+                try:
+                    semester = int(semester) if semester else 1
+                except:
+                    semester = 1
+            else:
+                semester = None
+            
+            # Check for duplicates
             existing = sb.table("users").select("id").eq("username", username).execute()
             if existing.data:
                 failed.append({"username": username, "error": "Already exists"})
                 continue
-            pwd = u.get("password", username + "@123")  # default fallback password
-            pwd_hash = hashlib.sha256(pwd.encode()).hexdigest()
+            
+            # Generate password
+            pwd = password or (username + "@123")
+            pwd_hash = _hash_password_secure(pwd)
+            
+            # Build payload
             payload = {
                 "username":    username,
                 "password_hash": pwd_hash,
                 "role":        role,
-                "full_name":   u.get("full_name", ""),
-                "email":       u.get("email", ""),
-                "department":  u.get("department", ""),
-                "program":     u.get("program", ""),
-                "section":     u.get("section", ""),
-                "semester":    int(u.get("semester", 1)) if role == "student" else None,
-                "roll_no":     u.get("roll_no") if role == "student" else None,
-                "employee_id": u.get("employee_id") if role == "faculty" else None,
-                "designation": u.get("designation", ""),
-                "subjects":    u.get("subjects", ""),
+                "full_name":   full_name or "",
+                "email":       email or "",
+                "department":  department or "",
+                "program":     program or "",
+                "section":     section or "",
+                "semester":    semester if role == "student" else None,
+                "roll_no":     roll_no if role == "student" else None,
+                "employee_id": emp_id if role == "faculty" else None,
+                "designation": designation or "",
+                "subjects":    subjects or "",
                 "created_at":  datetime.utcnow().isoformat(),
             }
+            
             result = sb.table("users").insert(payload).execute()
             created.append(result.data[0] if result.data else {"username": username})
         except Exception as e:
-            failed.append({"username": u.get("username", "?"), "error": str(e)})
+            failed.append({
+                "username": u.get("username") or u.get("email") or f"row_{idx}",
+                "error": f"Database error: {str(e)}"
+            })
 
     return jsonify(success=True,
                    created=len(created), failed=len(failed),
-                   errors=failed)
+                   errors=failed[:50])  # Return first 50 errors only to avoid huge responses
 
 # ── GRIEVANCES ────────────────────────────────────────────────
 @app.route("/api/grievances", methods=["GET"])
@@ -7828,41 +8753,83 @@ def generate_timetable_v2():
         semester = d.get("semester", 1)
         algorithm = d.get("algorithm", "simulated_annealing")
         
-        # Load configuration
-        breaks = sb.table("break_schedule").select("*") \
-            .eq("academic_year", academic_year) \
-            .eq("semester", semester) \
-            .is_("is_active", True) \
-            .execute().data or []
+        logger.info(f"[Timetable v2] Starting generation for {academic_year} sem {semester}")
+        
+        # Load configuration with error handling
+        try:
+            breaks = sb.table("break_schedule").select("*") \
+                .eq("academic_year", academic_year) \
+                .eq("semester", semester) \
+                .is_("is_active", True) \
+                .execute().data or []
+            logger.info(f"[Timetable v2] Loaded {len(breaks)} break schedules")
+        except Exception as e:
+            logger.warning(f"[Timetable v2] Could not load break schedules: {e}")
+            breaks = []
         
         # Load faculty assignments
-        assignments = sb.table("faculty_assignments").select("*") \
-            .eq("academic_year", academic_year) \
-            .eq("semester", semester) \
-            .is_("is_active", True) \
-            .execute().data or []
+        try:
+            assignments = sb.table("faculty_assignments").select("*") \
+                .eq("academic_year", academic_year) \
+                .eq("semester", semester) \
+                .is_("is_active", True) \
+                .execute().data or []
+            logger.info(f"[Timetable v2] Loaded {len(assignments)} faculty assignments")
+        except Exception as e:
+            logger.error(f"[Timetable v2] Error loading faculty assignments: {e}")
+            assignments = []
         
         if not assignments:
-            return jsonify(success=False, error="No faculty assignments found"), 400
+            return jsonify(success=False, error="No faculty assignments found for this semester"), 400
         
         # Load subjects
-        subjects = sb.table("subjects").select("*") \
-            .eq("semester", semester) \
-            .is_("is_active", True) \
-            .execute().data or []
+        try:
+            subjects = sb.table("subjects").select("*") \
+                .eq("semester", semester) \
+                .is_("is_active", True) \
+                .execute().data or []
+            logger.info(f"[Timetable v2] Loaded {len(subjects)} subjects")
+        except Exception as e:
+            logger.warning(f"[Timetable v2] Could not load subjects: {e}")
+            subjects = []
         
-        # Load rooms
-        rooms = sb.table("room_capacity").select("*") \
-            .eq("academic_year", academic_year) \
-            .is_("is_available", True) \
-            .execute().data or []
+        # Load rooms with better fallback
+        try:
+            rooms = sb.table("room_capacity").select("*") \
+                .eq("academic_year", academic_year) \
+                .is_("is_available", True) \
+                .execute().data or []
+            
+            # Fallback: if no available rooms, get all rooms
+            if not rooms:
+                logger.warning("[Timetable v2] No available rooms, loading all rooms")
+                rooms = sb.table("room_capacity").select("*") \
+                    .eq("academic_year", academic_year) \
+                    .execute().data or []
+            
+            logger.info(f"[Timetable v2] Loaded {len(rooms)} rooms")
+        except Exception as e:
+            logger.error(f"[Timetable v2] Error loading rooms: {e}")
+            rooms = []
         
         if not rooms:
-            return jsonify(success=False, error="No rooms configured"), 400
+            return jsonify(success=False, error="No rooms configured for this academic year"), 400
+        
+        # Validate assignment data
+        valid_assignments = []
+        for asgn in assignments:
+            required_fields = ['section', 'year', 'subject_code', 'subject_name', 'faculty_username']
+            if all(asgn.get(field) for field in required_fields):
+                valid_assignments.append(asgn)
+            else:
+                logger.warning(f"[Timetable v2] Skipping invalid assignment: {asgn}")
+        
+        if not valid_assignments:
+            return jsonify(success=False, error="No valid faculty assignments (missing required fields)"), 400
         
         # Generate timetable with constraints
         generated_slots = generate_timetable_with_contraints(
-            assignments=assignments,
+            assignments=valid_assignments,
             subjects=subjects,
             rooms=rooms,
             breaks=breaks,
@@ -7873,7 +8840,9 @@ def generate_timetable_v2():
         
         if not generated_slots:
             return jsonify(success=False, 
-                error="Could not generate valid timetable. Check constraints."), 400
+                error="Could not generate valid timetable. Check constraints and data."), 400
+        
+        logger.info(f"[Timetable v2] Successfully generated {len(generated_slots)} slots")
         
         return jsonify(
             success=True,
@@ -7883,8 +8852,9 @@ def generate_timetable_v2():
         )
     
     except Exception as e:
-        logger.exception("Error in generate_timetable_v2")
-        return jsonify(success=False, error=str(e)), 500
+        logger.exception(f"[Timetable v2] Unexpected error in generate_timetable_v2: {e}")
+        import traceback
+        return jsonify(success=False, error=f"Server error: {str(e)}", trace=traceback.format_exc()), 500
 
 
 def generate_timetable_with_contraints(assignments, subjects, rooms, breaks, academic_year, semester, algorithm):
@@ -7902,6 +8872,8 @@ def generate_timetable_with_contraints(assignments, subjects, rooms, breaks, aca
     """
     
     import random
+    
+    logger.info("[Timetable] Starting generation with constraint satisfaction")
     
     # Period configuration
     PERIODS = {
@@ -7935,42 +8907,48 @@ def generate_timetable_with_contraints(assignments, subjects, rooms, breaks, aca
     
     def can_assign(fac, sec, day, period, room):
         """Check if slot is free in all three conflict trackers"""
+        if not fac or not room:
+            return False
         return (conflict_key_fac(fac, day, period) not in faculty_busy and
                 conflict_key_room(room, day, period) not in room_busy and
                 conflict_key_sec(sec, day, period) not in section_busy)
     
     def commit(fac, sec, day, period, room, code, name, slot_type, year, prog):
         """Mark slot as occupied in all trackers and add to results"""
-        faculty_busy[conflict_key_fac(fac, day, period)] = True
-        room_busy[conflict_key_room(room, day, period)] = True
-        section_busy[conflict_key_sec(sec, day, period)] = True
-        
-        p = PERIODS[period]
-        generated_slots.append({
-            'academic_year': academic_year,
-            'semester': semester,
-            'section': sec,
-            'year': year,
-            'subject_code': code,
-            'subject_name': name,
-            'faculty_username': fac,
-            'day_of_week': day,
-            'period_number': period,
-            'start_time': p['start'],
-            'end_time': p['end'],
-            'room_number': room,
-            'type': slot_type,
-            'program': prog,
-            'shift': p['shift'],
-            'is_active': True,
-        })
+        try:
+            faculty_busy[conflict_key_fac(fac, day, period)] = True
+            room_busy[conflict_key_room(room, day, period)] = True
+            section_busy[conflict_key_sec(sec, day, period)] = True
+            
+            p = PERIODS.get(period, PERIODS[1])
+            generated_slots.append({
+                'academic_year': academic_year,
+                'semester': semester,
+                'section': sec,
+                'year': year,
+                'subject_code': code,
+                'subject_name': name,
+                'faculty_username': fac,
+                'day_of_week': day,
+                'period_number': period,
+                'start_time': p['start'],
+                'end_time': p['end'],
+                'room_number': room,
+                'type': slot_type,
+                'program': prog,
+                'shift': p['shift'],
+                'is_active': True,
+            })
+        except Exception as e:
+            logger.error(f"[Timetable] Error in commit: {e}")
+            raise
     
     def get_rooms_used_today(fac, day):
         """Get set of rooms already used by faculty on this day"""
         used = set()
         for slot in generated_slots:
-            if slot['faculty_username'] == fac and slot['day_of_week'] == day:
-                used.add(slot['room_number'])
+            if slot.get('faculty_username') == fac and slot.get('day_of_week') == day:
+                used.add(slot.get('room_number', ''))
         return used
     
     # ── PREPARE DATA ──
@@ -7980,134 +8958,294 @@ def generate_timetable_with_contraints(assignments, subjects, rooms, breaks, aca
     # Group assignments by section and year
     section_year_subjects = {}  # (section, year) → [(code, name, faculty), ...]
     for asgn in assignments:
-        sec = asgn.get('section', '')
-        yr = asgn.get('year', 1)
-        code = asgn.get('subject_code', '')
-        name = asgn.get('subject_name', '')
-        fac = asgn.get('faculty_username', '')
-        dept = asgn.get('department', '')
-        prog = asgn.get('program', 'B.Tech')
-        
-        if code and name and fac:
-            key = (sec, yr)
-            if key not in section_year_subjects:
-                section_year_subjects[key] = []
-            section_year_subjects[key].append({
-                'code': code,
-                'name': name,
-                'faculty': fac,
-                'dept': dept,
-                'prog': prog,
-            })
+        try:
+            sec = asgn.get('section', '').strip()
+            yr = int(asgn.get('year', 1))
+            code = asgn.get('subject_code', '').strip()
+            name = asgn.get('subject_name', '').strip()
+            fac = asgn.get('faculty_username', '').strip()
+            dept = asgn.get('department', '').strip()
+            prog = asgn.get('program', 'B.Tech').strip()
+            
+            if code and name and fac and sec:
+                key = (sec, yr)
+                if key not in section_year_subjects:
+                    section_year_subjects[key] = []
+                section_year_subjects[key].append({
+                    'code': code,
+                    'name': name,
+                    'faculty': fac,
+                    'dept': dept,
+                    'prog': prog,
+                })
+        except Exception as e:
+            logger.warning(f"[Timetable] Skipping malformed assignment: {asgn} - {e}")
+            continue
     
-    room_list = [rm.get('room_number', '') for rm in rooms if rm.get('room_number')]
-    faculty_list = list(set(a.get('faculty_username', '') for a in assignments if a.get('faculty_username')))
+    if not section_year_subjects:
+        logger.error("[Timetable] No valid section-year-subject mappings found")
+        return []
+    
+    room_list = [str(rm.get('room_number', '')).strip() for rm in rooms if rm.get('room_number')]
+    room_list = [r for r in room_list if r]  # Remove empty strings
+    
+    if not room_list:
+        logger.error("[Timetable] No valid rooms available")
+        return []
+    
+    faculty_list = list(set(a.get('faculty_username', '').strip() for a in assignments if a.get('faculty_username')))
+    faculty_list = [f for f in faculty_list if f]  # Remove empty strings
+    
+    if not faculty_list:
+        logger.error("[Timetable] No valid faculty members found")
+        return []
+    
+    logger.info(f"[Timetable] Prepared: {len(section_year_subjects)} section-years, {len(room_list)} rooms, {len(faculty_list)} faculty")
     
     # ── MAIN SCHEDULING LOOP ──
     # Iterate: Year → Section → Subject
+    subject_count = 0
     for (section, year) in sorted(section_year_subjects.keys()):
         subj_list = section_year_subjects[(section, year)]
         fac_idx = 0
         
         for subj in subj_list:
-            code = subj['code']
-            name = subj['name']
-            fac = faculty_list[fac_idx % len(faculty_list)] if faculty_list else subj['faculty']
-            fac_idx += 1
-            prog = subj.get('prog', 'B.Tech')
-            
-            # ── PLACE 3 THEORY SLOTS ──
-            theory_target = 3
-            theory_placed = 0
-            attempts = 0
-            used_theory_days = set()
-            
-            while theory_placed < theory_target and attempts < 80:
-                attempts += 1
-                day = random.choice(DAYS)
+            try:
+                code = subj.get('code', 'UNKNOWN')
+                name = subj.get('name', 'Unknown Subject')
+                fac = faculty_list[fac_idx % len(faculty_list)] if faculty_list else subj.get('faculty', 'UNKNOWN')
+                fac_idx += 1
+                prog = subj.get('prog', 'B.Tech')
+                subject_count += 1
                 
-                # Don't place same subject twice on same day
-                if day in used_theory_days:
-                    continue
+                # ── PLACE 3 THEORY SLOTS ──
+                theory_target = 3
+                theory_placed = 0
+                attempts = 0
+                used_theory_days = set()
                 
-                period = random.choice(THEORY_PERIODS)
-                
-                # Get available rooms (not used by this faculty today)
-                rooms_used = get_rooms_used_today(fac, day)
-                avail_rooms = [r for r in room_list if r not in rooms_used]
-                room = random.choice(avail_rooms) if avail_rooms else (room_list[0] if room_list else 'T101')
-                
-                if can_assign(fac, section, day, period, room):
-                    commit(fac, section, day, period, room, code, name, 'Theory', year, prog)
-                    used_theory_days.add(day)
-                    theory_placed += 1
-            
-            if theory_placed < theory_target:
-                conflicts_list.append(f"{code} (Sec {section}): Only {theory_placed}/{theory_target} theory slots")
-            
-            # ── PLACE 2 LAB SESSIONS (2 consecutive hours each) ──
-            lab_target = 2
-            lab_placed = 0
-            attempts = 0
-            
-            while lab_placed < lab_target and attempts < 50:
-                attempts += 1
-                day = random.choice(DAYS)
-                lab_pairs = LAB_PAIRS[:]
-                random.shuffle(lab_pairs)
-                
-                for pair in lab_pairs:
-                    p1, p2 = pair
+                while theory_placed < theory_target and attempts < 80:
+                    attempts += 1
+                    day = random.choice(DAYS)
                     
-                    # Get lab rooms
+                    # Don't place same subject twice on same day
+                    if day in used_theory_days:
+                        continue
+                    
+                    period = random.choice(THEORY_PERIODS)
+                    
+                    # Get available rooms (not used by this faculty today)
                     rooms_used = get_rooms_used_today(fac, day)
-                    avail_labs = [r for r in room_list if r not in rooms_used]
-                    lab_room = random.choice(avail_labs) if avail_labs else (room_list[-1] if room_list else 'L101')
+                    avail_rooms = [r for r in room_list if r not in rooms_used]
+                    room = random.choice(avail_rooms) if avail_rooms else room_list[0]
                     
-                    if can_assign(fac, section, day, p1, lab_room) and can_assign(fac, section, day, p2, lab_room):
-                        # Commit both periods as one 2-hour lab block
-                        p1_cfg = PERIODS[p1]
-                        p2_cfg = PERIODS[p2]
+                    if can_assign(fac, section, day, period, room):
+                        commit(fac, section, day, period, room, code, name, 'Theory', year, prog)
+                        used_theory_days.add(day)
+                        theory_placed += 1
+                
+                if theory_placed < theory_target:
+                    conflicts_list.append(f"{code} (Sec {section}): Only {theory_placed}/{theory_target} theory slots")
+                
+                # ── PLACE 2 LAB SESSIONS (2 consecutive hours each) ──
+                lab_target = 2
+                lab_placed = 0
+                attempts = 0
+                used_lab_days = set()
+                
+                while lab_placed < lab_target and attempts < 50:
+                    attempts += 1
+                    day = random.choice(DAYS)
+                    
+                    # Don't place same lab twice on same day
+                    if day in used_lab_days:
+                        continue
+                    
+                    lab_pairs = LAB_PAIRS[:]
+                    random.shuffle(lab_pairs)
+                    
+                    for pair in lab_pairs:
+                        p1, p2 = pair
                         
-                        faculty_busy[conflict_key_fac(fac, day, p1)] = True
-                        faculty_busy[conflict_key_fac(fac, day, p2)] = True
-                        room_busy[conflict_key_room(lab_room, day, p1)] = True
-                        room_busy[conflict_key_room(lab_room, day, p2)] = True
-                        section_busy[conflict_key_sec(section, day, p1)] = True
-                        section_busy[conflict_key_sec(section, day, p2)] = True
+                        # Get lab rooms
+                        rooms_used = get_rooms_used_today(fac, day)
+                        avail_labs = [r for r in room_list if r not in rooms_used]
+                        lab_room = random.choice(avail_labs) if avail_labs else room_list[0]
                         
-                        # Single entry for 2-hour lab block
-                        generated_slots.append({
-                            'academic_year': academic_year,
-                            'semester': semester,
-                            'section': section,
-                            'year': year,
-                            'subject_code': code + '_Lab',
-                            'subject_name': name + ' (Lab)',
-                            'faculty_username': fac,
-                            'day_of_week': day,
-                            'period_number': p1,
-                            'start_time': p1_cfg['start'],
-                            'end_time': p2_cfg['end'],  # 2-hour block
-                            'room_number': lab_room,
-                            'type': 'Lab',
-                            'program': prog,
-                            'shift': p1_cfg['shift'],
-                            'lab_pair': [p1, p2],
-                            'is_active': True,
-                        })
-                        
-                        lab_placed += 1
-                        break
-            
-            if lab_placed < lab_target:
-                conflicts_list.append(f"{code} Lab (Sec {section}): Only {lab_placed}/{lab_target} lab sessions")
+                        if can_assign(fac, section, day, p1, lab_room) and can_assign(fac, section, day, p2, lab_room):
+                            # Commit both periods as one 2-hour lab block
+                            p1_cfg = PERIODS.get(p1, PERIODS[1])
+                            p2_cfg = PERIODS.get(p2, PERIODS[1])
+                            
+                            faculty_busy[conflict_key_fac(fac, day, p1)] = True
+                            faculty_busy[conflict_key_fac(fac, day, p2)] = True
+                            room_busy[conflict_key_room(lab_room, day, p1)] = True
+                            room_busy[conflict_key_room(lab_room, day, p2)] = True
+                            section_busy[conflict_key_sec(section, day, p1)] = True
+                            section_busy[conflict_key_sec(section, day, p2)] = True
+                            
+                            # Single entry for 2-hour lab block
+                            generated_slots.append({
+                                'academic_year': academic_year,
+                                'semester': semester,
+                                'section': section,
+                                'year': year,
+                                'subject_code': code + '_Lab',
+                                'subject_name': name + ' (Lab)',
+                                'faculty_username': fac,
+                                'day_of_week': day,
+                                'period_number': p1,
+                                'start_time': p1_cfg['start'],
+                                'end_time': p2_cfg['end'],  # 2-hour block
+                                'room_number': lab_room,
+                                'type': 'Lab',
+                                'program': prog,
+                                'shift': p1_cfg['shift'],
+                                'lab_pair': [p1, p2],
+                                'is_active': True,
+                            })
+                            
+                            lab_placed += 1
+                            used_lab_days.add(day)
+                            break
+                
+                if lab_placed < lab_target:
+                    conflicts_list.append(f"{code} Lab (Sec {section}): Only {lab_placed}/{lab_target} lab sessions")
+                    
+            except Exception as e:
+                logger.error(f"[Timetable] Error scheduling subject {subj.get('code', 'UNKNOWN')}: {e}")
+                conflicts_list.append(f"Error: {str(e)[:100]}")
+                continue
     
-    # Add conflicts to each generated slot
+    # Add conflicts to logs
     if conflicts_list:
-        logger.warning(f"[Timetable Generation] Conflicts: {conflicts_list}")
+        logger.warning(f"[Timetable] Generation warnings ({len(conflicts_list)}): {conflicts_list[:10]}")
+    
+    logger.info(f"[Timetable] Generated {len(generated_slots)} slots for {subject_count} subjects in {len(section_year_subjects)} section-years")
     
     return generated_slots
+
+
+# ── FIRESTORE DATA RETRIEVAL & SYNC ENDPOINTS ─────────────────────────
+
+@app.route("/api/firestore/attendance/<roll_no>", methods=["GET"])
+def get_firestore_attendance(roll_no):
+    """Retrieve all attendance records for a student from Firestore."""
+    try:
+        if not _fstore:
+            return jsonify(success=False, error="Firestore not available"), 503
+        
+        # Query all attendance records for this roll_no
+        docs = _fstore.collection("attendance").where("roll_no", "==", roll_no).stream()
+        records = []
+        for doc in docs:
+            data = doc.to_dict()
+            data['firestore_id'] = doc.id
+            records.append(data)
+        
+        return jsonify(
+            success=True,
+            count=len(records),
+            records=records
+        ), 200
+    
+    except Exception as e:
+        print(f"[FIRESTORE] Error retrieving attendance: {e}")
+        return jsonify(success=False, error=str(e)), 500
+
+
+@app.route("/api/firestore/user/<user_id>", methods=["GET"])
+def get_firestore_user(user_id):
+    """Retrieve user data from Firestore."""
+    try:
+        if not _fstore:
+            return jsonify(success=False, error="Firestore not available"), 503
+        
+        doc = _fstore.collection("users").document(user_id).get()
+        if doc.exists:
+            data = doc.to_dict()
+            return jsonify(success=True, user=data), 200
+        else:
+            return jsonify(success=False, error="User not found in Firestore"), 404
+    
+    except Exception as e:
+        print(f"[FIRESTORE] Error retrieving user: {e}")
+        return jsonify(success=False, error=str(e)), 500
+
+
+@app.route("/api/firestore/sync-status", methods=["GET"])
+def firestore_sync_status():
+    """Check if Firestore is available and syncing."""
+    try:
+        if not _fstore:
+            return jsonify(
+                available=False,
+                message="Firebase Admin SDK not initialized"
+            ), 503
+        
+        # Test basic connection
+        docs = _fstore.collection("_test").limit(1).stream()
+        list(docs)  # Force fetch
+        
+        return jsonify(
+            available=True,
+            message="Firestore is operational",
+            url=os.getenv('FIREBASE_CONFIG_URL', 'not configured')
+        ), 200
+    
+    except Exception as e:
+        print(f"[FIRESTORE] Sync status check failed: {e}")
+        return jsonify(
+            available=False,
+            error=str(e)
+        ), 503
+
+
+@app.route("/api/firestore/batch-sync", methods=["POST"])
+def firestore_batch_sync():
+    """Admin endpoint: Sync batch of records to Firestore from Supabase."""
+    try:
+        data = request.json or {}
+        collection = data.get("collection")  # "users", "attendance", etc.
+        filter_query = data.get("filter")  # Optional SQL-like filter
+        limit = data.get("limit", 100)
+        
+        if not collection:
+            return jsonify(success=False, error="Collection name required"), 400
+        
+        if not _fstore or not sb:
+            return jsonify(success=False, error="Firestore or Supabase not available"), 503
+        
+        # Fetch from Supabase
+        query = sb.table(collection).select("*").limit(limit)
+        if filter_query:
+            # Simple filter support (e.g., "role=eq.student")
+            for part in filter_query.split("&"):
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    query = query.eq(k.strip(), v.strip())
+        
+        result = query.execute()
+        records = result.data if result.data else []
+        
+        # Batch write to Firestore
+        batch = _fstore.batch()
+        for record in records:
+            doc_id = str(record.get("id", uuid.uuid4()))
+            ref = _fstore.collection(collection).document(doc_id)
+            batch.set(ref, record, merge=True)
+        
+        batch.commit()
+        
+        return jsonify(
+            success=True,
+            message=f"Synced {len(records)} records from {collection} to Firestore",
+            synced_count=len(records)
+        ), 200
+    
+    except Exception as e:
+        print(f"[FIRESTORE] Batch sync error: {e}")
+        return jsonify(success=False, error=str(e)), 500
 
 
 # ── SESSION VALIDATION (Production-ready for Firestore sessions) ──────────────
@@ -8167,6 +9305,49 @@ if __name__=="__main__":
         print("SmartAMS Backend — http://localhost:6001")
     
     print("QR Security System — ENABLED")
+    
+    # ── ADMIN: Initialize first admin user ──────────────────────────
+    @app.route("/api/init-admin", methods=["POST"])
+    def init_admin():
+        """Initialize the first admin user (one-time setup endpoint)"""
+        try:
+            data = request.json
+            password = data.get('password', '')
+            password_confirm = data.get('password_confirm', '')
+            
+            if not password or password != password_confirm:
+                return jsonify(error="Passwords don't match"), 400
+            
+            if len(password) < 8:
+                return jsonify(error="Password must be at least 8 characters"), 400
+            
+            # Check if admin_demo already exists
+            result = sb.table("users").select("id").eq("username", "admin_demo").execute()
+            
+            if result.data:
+                # Update existing admin_demo with new password
+                pwd_hash = _hash_password_secure(password)
+                update_result = sb.table("users").update(
+                    {"password_hash": pwd_hash}
+                ).eq("username", "admin_demo").execute()
+                
+                if update_result.data:
+                    return jsonify(success=True, message="Admin password updated", username="admin_demo")
+            
+            return jsonify(error="Admin user not found"), 404
+                
+        except Exception as e:
+            logger.error(f"[INIT] Admin init error: {e}")
+            return jsonify(error=str(e)), 500
+    
+    # ── Register RBAC Analytics Routes ──────────────────────────────
+    if RBAC_AVAILABLE:
+        try:
+            register_rbac_analytics_routes(app, sb=sb)
+            logger.info("[APP] ✓ RBAC analytics routes registered")
+        except Exception as e:
+            logger.warning(f"[APP] Could not register RBAC routes: {e}")
+    
     # Disable debug and reloader to prevent hanging requests
     # Debug mode with Flask's debugger can cause request timeouts
     app.run(debug=False, use_reloader=False, host="0.0.0.0", port=port, threaded=True)

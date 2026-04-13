@@ -1,0 +1,708 @@
+/* ═══════════════════════════════════════════════════════════
+   QR ATTENDANCE SYSTEM – DYNAMIC STYLES
+   ═══════════════════════════════════════════════════════════ */
+
+/* ─────────────────────────────────────────────────────────
+   STUDENT QR SCANNER STYLES
+   ───────────────────────────────────────────────────────── */
+
+.qr-scanner-wrapper {
+  padding: 2rem;
+  max-width: 100%;
+}
+
+.qr-scanner-header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.qr-scanner-header h2 {
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+  color: var(--text);
+}
+
+.qr-scanner-header p {
+  color: var(--text2);
+  font-size: 1rem;
+}
+
+.qr-scanner-container {
+  position: relative;
+  width: 100%;
+  max-width: 500px;
+  margin: 2rem auto;
+  aspect-ratio: 1;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: #000;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+#qr-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.scanner-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.scanner-box {
+  width: 80%;
+  height: 80%;
+  border: 3px solid var(--blue3);
+  border-radius: 12px;
+  box-shadow: inset 0 0 20px rgba(88, 166, 255, 0.2);
+  animation: pulse-border 2s ease-in-out infinite;
+}
+
+@keyframes pulse-border {
+  0%, 100% { box-shadow: inset 0 0 20px rgba(88, 166, 255, 0.2); }
+  50% { box-shadow: inset 0 0 40px rgba(88, 166, 255, 0.4); }
+}
+
+.qr-scanner-info {
+  text-align: center;
+  margin-top: 1.5rem;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1.5rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  transition: var(--transition);
+  font-weight: 500;
+}
+
+.status-badge.status-waiting {
+  background: rgba(224, 186, 62, 0.1);
+  border-color: var(--yellow);
+  color: var(--yellow);
+}
+
+.status-badge.status-success {
+  background: rgba(63, 185, 80, 0.1);
+  border-color: var(--green2);
+  color: var(--green2);
+}
+
+.status-badge.status-error {
+  background: rgba(248, 81, 73, 0.1);
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.status-icon {
+  font-size: 1.25rem;
+}
+
+.qr-attendance-form {
+  max-width: 600px;
+  margin: 2rem auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 2rem;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.qr-attendance-form h3 {
+  margin-bottom: 1.5rem;
+  color: var(--text);
+}
+
+.form-section {
+  margin-bottom: 1.5rem;
+}
+
+.form-section label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.form-section input,
+.form-section select {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--ink3);
+  color: var(--text);
+  font-size: 1rem;
+  transition: var(--transition);
+}
+
+.form-section input:focus,
+.form-section select:focus {
+  outline: none;
+  border-color: var(--blue3);
+  box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.1);
+}
+
+.form-section input:disabled {
+  background: var(--ink2);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.location-status,
+.face-status {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.location-status.status-success,
+.face-status.status-success {
+  background: rgba(63, 185, 80, 0.1);
+  color: var(--green2);
+  border: 1px solid var(--green2);
+}
+
+.location-status.status-error,
+.face-status.status-error {
+  background: rgba(248, 81, 73, 0.1);
+  color: var(--red);
+  border: 1px solid var(--red);
+}
+
+.location-status.status-warning {
+  background: rgba(224, 186, 62, 0.1);
+  color: var(--yellow);
+  border: 1px solid var(--yellow);
+}
+
+#face-preview {
+  margin-top: 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.form-actions {
+  display: flex;
+  gap: 1rem;
+  margin-top: 2rem;
+  flex-wrap: wrap;
+}
+
+.btn-primary,
+.btn-secondary,
+.btn-danger {
+  flex: 1;
+  min-width: 150px;
+  padding: 0.75rem 1.5rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--blue), var(--blue2));
+  color: white;
+  box-shadow: var(--glow-blue);
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 0 30px rgba(31, 111, 235, 0.5);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: var(--ink3);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.btn-secondary:hover {
+  background: var(--border);
+}
+
+.btn-danger {
+  background: var(--red);
+  color: white;
+}
+
+.btn-danger:hover {
+  opacity: 0.8;
+}
+
+.attendance-result {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  border-radius: var(--radius-sm);
+}
+
+.result-success {
+  background: rgba(63, 185, 80, 0.1);
+  border: 1px solid var(--green2);
+  color: var(--green2);
+}
+
+.result-error {
+  background: rgba(248, 81, 73, 0.1);
+  border: 1px solid var(--red);
+  color: var(--red);
+}
+
+.result-success h3,
+.result-error h3 {
+  margin-bottom: 0.75rem;
+}
+
+.success-message,
+.error-message {
+  font-size: 0.9rem;
+  margin-top: 0.5rem;
+  font-weight: 500;
+}
+
+/* ─────────────────────────────────────────────────────────
+   TEACHER QR GENERATOR STYLES
+   ───────────────────────────────────────────────────────── */
+
+.qr-generator-wrapper {
+  padding: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.qr-generator-header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.qr-generator-header h2 {
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+}
+
+.qr-config-section,
+.qr-display-section {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 2rem;
+  margin-bottom: 2rem;
+}
+
+.qr-config-section h3,
+.qr-display-section h3 {
+  margin-bottom: 1.5rem;
+  font-size: 1.25rem;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.qr-display {
+  text-align: center;
+  padding: 2rem;
+  background: var(--ink2);
+  border-radius: var(--radius-lg);
+  margin-bottom: 1.5rem;
+}
+
+#qr-code-container {
+  display: inline-block;
+  margin: 1rem auto;
+}
+
+#qr-code-container img {
+  max-width: 100%;
+  height: auto;
+  border: 2px solid var(--blue3);
+  border-radius: 8px;
+}
+
+.qr-stats {
+  margin: 2rem 0;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.stat-card {
+  background: var(--ink2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1.5rem;
+  text-align: center;
+  transition: var(--transition);
+}
+
+.stat-card:hover {
+  border-color: var(--blue3);
+  box-shadow: 0 0 15px rgba(88, 166, 255, 0.1);
+}
+
+.stat-value {
+  font-size: 2rem;
+  font-weight: 800;
+  color: var(--blue3);
+  margin-bottom: 0.5rem;
+}
+
+.stat-label {
+  font-size: 0.875rem;
+  color: var(--text2);
+  font-weight: 500;
+}
+
+.attendance-live-list {
+  background: var(--ink2);
+  border-radius: var(--radius-sm);
+  padding: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.attendance-live-list h4 {
+  margin-bottom: 1rem;
+}
+
+.attendees-list {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.attendee-item {
+  display: grid;
+  grid-template-columns: 1fr 100px 1fr 100px;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  transition: var(--transition);
+}
+
+.attendee-item:hover {
+  background: rgba(31, 111, 235, 0.05);
+}
+
+.attendee-item.verified {
+  opacity: 0.8;
+}
+
+.attendee-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.attendee-roll {
+  font-size: 0.875rem;
+  color: var(--text2);
+}
+
+.attendee-status {
+  text-align: center;
+  font-size: 0.875rem;
+}
+
+.attendee-item.verified .attendee-status {
+  color: var(--green2);
+}
+
+.attendee-item.unverified .attendee-status {
+  color: var(--yellow);
+}
+
+.attendee-time {
+  text-align: right;
+  font-size: 0.875rem;
+  color: var(--text3);
+}
+
+/* ─────────────────────────────────────────────────────────
+   ADMIN DASHBOARD STYLES
+   ───────────────────────────────────────────────────────── */
+
+.qr-admin-wrapper {
+  padding: 2rem;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.admin-header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.admin-filters {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 2rem;
+  margin-bottom: 2rem;
+}
+
+.admin-filters h3,
+.admin-stats h3,
+.admin-records h3,
+.admin-bulk-actions h3 {
+  margin-bottom: 1.5rem;
+  font-size: 1.25rem;
+}
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.filter-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.filter-section label {
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--text2);
+}
+
+.filter-section input,
+.filter-section select {
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--ink3);
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.admin-stats {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 2rem;
+  margin-bottom: 2rem;
+}
+
+.admin-records {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 2rem;
+  margin-bottom: 2rem;
+}
+
+.table-wrapper {
+  overflow-x: auto;
+  margin-top: 1rem;
+}
+
+.attendance-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.attendance-table thead {
+  background: var(--ink2);
+  border-bottom: 2px solid var(--border);
+}
+
+.attendance-table th {
+  padding: 1rem;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.attendance-table td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.attendance-table tbody tr:hover {
+  background: rgba(31, 111, 235, 0.05);
+}
+
+.attendance-table tbody tr.present {
+  opacity: 0.95;
+}
+
+.attendance-table tbody tr.present td:nth-child(5) {
+  color: var(--green2);
+  font-weight: 600;
+}
+
+.attendance-table tbody tr.absent td:nth-child(5) {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.status-select {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--ink3);
+  color: var(--text);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.btn-edit-small {
+  padding: 0.35rem 0.75rem;
+  border: none;
+  border-radius: 4px;
+  background: var(--blue);
+  color: white;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.btn-edit-small:hover {
+  background: var(--blue2);
+}
+
+.admin-bulk-actions {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 2rem;
+}
+
+.bulk-actions {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.bulk-actions button {
+  padding: 0.75rem 1.5rem;
+}
+
+/* ─────────────────────────────────────────────────────────
+   RESPONSIVE DESIGN
+   ───────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .qr-scanner-wrapper,
+  .qr-generator-wrapper,
+  .qr-admin-wrapper {
+    padding: 1rem;
+  }
+  
+  .qr-scanner-container {
+    max-width: 100%;
+    margin: 1rem auto;
+  }
+  
+  .form-grid,
+  .filter-grid,
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .form-actions {
+    flex-direction: column;
+  }
+  
+  .btn-primary,
+  .btn-secondary,
+  .btn-danger {
+    min-width: 100%;
+  }
+  
+  .attendee-item {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+  
+  .attendance-table {
+    font-size: 0.8rem;
+  }
+  
+  .attendance-table th,
+  .attendance-table td {
+    padding: 0.5rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .qr-scanner-wrapper h2,
+  .qr-generator-header h2,
+  .admin-header h2 {
+    font-size: 1.5rem;
+  }
+  
+  .stat-value {
+    font-size: 1.5rem;
+  }
+  
+  .filter-section,
+  .form-section {
+    margin-bottom: 1rem;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────
+   ANIMATIONS & TRANSITIONS
+   ───────────────────────────────────────────────────────── */
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.qr-scanner-wrapper,
+.qr-generator-wrapper,
+.qr-admin-wrapper {
+  animation: slideIn 0.3s ease-out;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.status-badge.status-waiting .status-icon {
+  display: inline-block;
+  animation: spin 2s linear infinite;
+}

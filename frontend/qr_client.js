@@ -11,7 +11,7 @@ const QRModule = {
   // Configuration
   config: {
     get apiBase() {
-      return (window.AMS_CONFIG && window.AMS_CONFIG.API_URL) || "https://smartams-backend-76160313029.us-central1.run.app";
+      return (window.AMS_CONFIG && window.AMS_CONFIG.API_URL) || "https://smartams-backend-ts3a5sewfq-uc.a.run.app";
     },
     offlineEnabled: true,
     offlineStorageKey: "ams_qr_offline_queue",

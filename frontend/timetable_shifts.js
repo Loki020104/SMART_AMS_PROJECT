@@ -473,7 +473,7 @@ async function loadShiftConfiguration() {
   gap: 12px;
 }
 
-/* Class Slot Styling */
+// Class Slot Styling
 
 .class-slot {
   background: white;
@@ -532,7 +532,7 @@ async function loadShiftConfiguration() {
   gap: 4px;
 }
 
-/* Break Slot Styling */
+// Break Slot Styling
 
 .break-slot {
   background: #f0f4ff;
@@ -578,7 +578,7 @@ async function loadShiftConfiguration() {
   opacity: 0.8;
 }
 
-/* Break Info Cards */
+// Break Info Cards
 
 .breaks-summary,
 .shift-summary {

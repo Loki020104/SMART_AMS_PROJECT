@@ -1,0 +1,6 @@
+full_name,email,role,department,designation,employee_id
+"Dr. Rajesh Kumar","rajesh.kumar@puc.edu.in","faculty","Computer Science","Assistant Professor","FAC001"
+"Prof. Anita Singh","anita.singh@puc.edu.in","faculty","Computer Science","Professor","FAC002"
+"Dr. Mohan Das","mohan.das@puc.edu.in","faculty","Computer Science","Assistant Professor","FAC003"
+"Dr. Priya Sharma","priya.sharma@puc.edu.in","faculty","Electronics","Associate Professor","FAC004"
+"Prof. Vikram Gupta","vikram.gupta@puc.edu.in","faculty","Electronics","HOD","FAC005"

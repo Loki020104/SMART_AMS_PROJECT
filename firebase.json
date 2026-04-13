@@ -1,7 +1,4 @@
 {
-  "projects": {
-    "default": "smart-ams-project-faa5f"
-  },
   "hosting": {
     "public": "frontend",
     "ignore": [

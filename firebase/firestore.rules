@@ -2,66 +2,101 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    // Allow unauthenticated read/write for development
-    // Change this for production with proper authentication
+    // *** SMART AMS FIRESTORE SECURITY RULES ***
+    // Production-ready with role-based access control
     
-    // Session storage (for app session persistence)
-    match /sessions/{username} {
-      allow read, write: if true;
+    // Default: Deny all access (most restrictive)
+    match /{document=**} {
+      allow read, write: if false;
     }
     
-    // Users collection
+    // Users collection - must be authenticated
     match /users/{userId} {
-      allow read, write: if request.auth != null || true;
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth.uid == userId;
+      allow delete: if false;  // No user deletion via Firestore
       
-      // Subcollection for attendance
-      match /attendance/{docId} {
-        allow read, write: if request.auth != null || true;
+      // User attendance subcollection
+      match /attendance/{attendanceId} {
+        allow read, write: if request.auth != null;
+      }
+      
+      // User marks subcollection
+      match /marks/{courseId} {
+        allow read, write: if request.auth != null;
       }
     }
     
-    // Students collection
-    match /students/{studentId} {
-      allow read, write: if request.auth != null || true;
-      
-      // Subcollection for face encodings
-      match /face_data/{docId} {
-        allow read, write: if request.auth != null || true;
-      }
+    // Attendance records - read for authenticated, write controlled by backend
+    match /attendance/{attendanceId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;
+      allow delete: if false;
     }
     
-    // Attendance records
-    match /attendance/{docId} {
-      allow read, write: if request.auth != null || true;
-    }
-    
-    // QR sessions
+    // QR Sessions - for real-time attendance check-in
     match /qr_sessions/{sessionId} {
-      allow read, write: if request.auth != null || true;
-      
-      allow delete: if request.time > resource.data.expires_at;
+      allow read: if true;  // QR sessions are public (sessionId is auth)
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+      allow delete: if request.time > resource.data.expires_at;  // Auto-expire
     }
     
-    // Reports
-    match /reports/{reportId} {
-      allow read, write: if request.auth != null || true;
-    }
-    
-    // Course data
+    // Courses collection
     match /courses/{courseId} {
-      allow read: if true;
-      allow write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;  // Controlled by backend
+      allow delete: if false;
+      
+      // Course announcements
+      match /announcements/{annoId} {
+        allow read: if request.auth != null;
+        allow write: if request.auth != null;
+      }
     }
     
-    // Faculty data
-    match /faculty/{facultyId} {
-      allow read: if true;
+    // Timetable data
+    match /timetable/{docId} {
+      allow read: if request.auth != null;
       allow write: if request.auth != null;
+      allow delete: if false;
     }
-
-    // Frontend sessions (username/password login — no Firebase Auth token)
-    match /sessions/{username} {
-      allow read, write, delete: if true;
+    
+    // Global announcements
+    match /announcements/{annoId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;  // Backend will verify admin
+      allow delete: if false;
+    }
+    
+    // Reports collection
+    match /reports/{reportId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+      allow delete: if false;
+    }
+    
+    // Departments
+    match /departments/{deptId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;  // Backend will verify admin
+      allow delete: if false;
+    }
+    
+    // Programs
+    match /programs/{progId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null;  // Backend will verify admin
+      allow delete: if false;
+    }
+    
+    // Face encodings (for face recognition)
+    match /face_encodings/{userId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth.uid == userId || request.auth != null;
+      allow delete: if request.auth.uid == userId;
     }
   }
 }

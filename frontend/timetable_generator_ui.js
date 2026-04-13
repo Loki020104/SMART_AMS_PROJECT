@@ -581,24 +581,56 @@ const TimetableGeneratorUI = {
   },
 
   loadConfiguration() {
-    // Load default subjects
-    this.state.subjects = {
-      1: [
-        {code:'CS101', name:'Programming Fundamentals', th:3, lab:1},
-        {code:'CS102', name:'Mathematics I', th:3, lab:0},
-        {code:'CS103', name:'Digital Logic Design', th:3, lab:1},
-      ],
-      2: [
-        {code:'CS201', name:'Data Structures', th:3, lab:1},
-        {code:'CS202', name:'Mathematics II', th:3, lab:0},
-      ],
-      3: [
-        {code:'CS301', name:'Algorithms', th:3, lab:1},
-      ],
-      4: [
-        {code:'CS401', name:'Machine Learning', th:3, lab:1},
-      ],
-    };
+    // Fetch courses from backend API
+    fetch(`${window.AMS_CONFIG.API_URL}/api/courses`, {
+      headers: {
+        'Authorization': `Bearer ${CustomDB.getToken()}`,
+        'Content-Type': 'application/json'
+      }
+    })
+    .then(res => res.json())
+    .then(data => {
+      console.log('[TimetableGeneratorUI] Loaded courses:', data);
+      if (data.data) {
+        // Group courses by year
+        this.state.subjects = {};
+        data.data.forEach(course => {
+          const year = course.year || 1;
+          if (!this.state.subjects[year]) {
+            this.state.subjects[year] = [];
+          }
+          this.state.subjects[year].push({
+            code: course.code,
+            name: course.name,
+            th: course.lecture_hours || 3,
+            lab: course.lab_hours || 0,
+            credits: course.credits || 3
+          });
+        });
+        console.log('[TimetableGeneratorUI] Grouped subjects by year:', this.state.subjects);
+      }
+    })
+    .catch(err => {
+      console.error('[TimetableGeneratorUI] Failed to load courses:', err);
+      // Fallback to hardcoded subjects if API fails
+      this.state.subjects = {
+        1: [
+          {code:'CS101', name:'Programming Fundamentals', th:3, lab:1},
+          {code:'CS102', name:'Mathematics I', th:3, lab:0},
+          {code:'CS103', name:'Digital Logic Design', th:3, lab:1},
+        ],
+        2: [
+          {code:'CS201', name:'Data Structures', th:3, lab:1},
+          {code:'CS202', name:'Mathematics II', th:3, lab:0},
+        ],
+        3: [
+          {code:'CS301', name:'Algorithms', th:3, lab:1},
+        ],
+        4: [
+          {code:'CS401', name:'Machine Learning', th:3, lab:1},
+        ],
+      };
+    });
   }
 };
 

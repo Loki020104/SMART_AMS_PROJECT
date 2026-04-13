@@ -188,6 +188,7 @@ const NAV_CONFIG = {
     ]},
     { section: 'Attendance', items: [
       { id:'s-attendance', icon:'✅', label:'Attendance' },
+      { id:'s-qr-scanner', icon:'📱', label:'Scan QR (Attendance)' },
     ]},
     { section: 'Fees & Finance', items: [
       { id:'s-fees',       icon:'💳', label:'Fee Management' },
@@ -230,7 +231,8 @@ const NAV_CONFIG = {
     ]},
     { section: 'Attendance', items: [
       { id:'f-attendance', icon:'✅', label:'Attendance Marking' },
-      { id:'f-subject-students', icon:'👥', label:'Subject Students' },
+      { id:'f-qr-generator', icon:'📊', label:'Generate QR' },
+      { id:'f-qr-records', icon:'📋', label:'Attendance Records' },
     ]},
     { section: 'Assessments', items: [
       { id:'f-assessments',icon:'📋', label:'Assessments' },
@@ -287,13 +289,15 @@ const NAV_CONFIG = {
       { id:'a-assessments',  icon:'📋', label:'Assessments' },
     ]},
     { section: 'Student Modules (Admin)', items: [
-      { id:'a-bulk-enroll', icon:'📚', label:'Bulk Student Enrollment' },
       { id:'a-s-attendance',icon:'✅', label:'Student Attendance' },
       { id:'a-s-fees',      icon:'💳', label:'Student Fees' },
       { id:'a-s-performance',icon:'📈',label:'Student Performance' },
       { id:'a-s-leave',     icon:'🏖️', label:'Leave Management' },
       { id:'a-s-placement', icon:'💼', label:'Placement Data' },
       { id:'a-s-grievance', icon:'⚖️', label:'Grievances' },
+    ]},
+    { section: 'QR Attendance', items: [
+      { id:'a-qr-dashboard', icon:'📈', label:'Attendance Dashboard' },
     ]},
     { section: 'Reports', items: [
       { id:'a-reports',    icon:'📊', label:'Global Reports' },
@@ -344,6 +348,27 @@ function fmtDate(d=new Date()){
 function fmtTime(d=new Date()){return d.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})}
 function randomId(){return Math.random().toString(36).slice(2,9).toUpperCase()}
 function stopCamera(){if(AMS.cameraStream){AMS.cameraStream.getTracks().forEach(t=>t.stop());AMS.cameraStream=null}}
+
+// Check if current time is within attendance window (before attendance_window_end time)
+function isWithinAttendanceWindow(){
+  const endTime = (AMS.systemConfig && AMS.systemConfig.attendance_window_end) ? AMS.systemConfig.attendance_window_end : '18:00';
+  const now = new Date();
+  const currentTime = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
+  
+  // Compare times as strings (HH:MM format)
+  return currentTime <= endTime;
+}
+
+// Get geofence radius and coordinates dynamically
+function getGeofenceSettings(){
+  return {
+    lat: (AMS.college && AMS.college.lat) ? AMS.college.lat : COLLEGE_LAT,
+    lng: (AMS.college && AMS.college.lng) ? AMS.college.lng : COLLEGE_LNG,
+    radiusKm: (AMS.college && typeof AMS.college.radiusKm === 'number') ? AMS.college.radiusKm : COLLEGE_KM,
+    tolerance: (AMS.systemConfig && AMS.systemConfig.tolerance) ? AMS.systemConfig.tolerance : '0.5',
+    qr_expiry_minutes: (AMS.systemConfig && AMS.systemConfig.qr_expiry_minutes) ? AMS.systemConfig.qr_expiry_minutes : 5,
+  };
+}
 
 // ── Camera helpers ────────────────────────────────────────
 async function startCamera(videoEl){
@@ -516,6 +541,12 @@ function selectRole(el){
   }
   if(userInput) userInput.value='';
 }
+
+function handleForgotPassword(){
+  const roleLabel = AMS.role.charAt(0).toUpperCase() + AMS.role.slice(1);
+  toast(`${roleLabel} password reset is handled by admin support. Please contact your administrator.`, 'info');
+}
+
 async function doLogin(){
   const u=document.getElementById('loginUser').value.trim();
   const p=document.getElementById('loginPass').value;
@@ -536,8 +567,13 @@ async function doLogin(){
           const data=await resp.json();
           if(data.success){_handleLoginSuccess(data);return;}
         }
+        // ── CHECK: Inactive/Archived User ────
         if(resp && resp.status===403){
           const errData=await resp.json().catch(()=>({}));
+          if(errData.error && errData.error.includes('inactive')){
+            console.warn('[AUTH] User account is inactive/archived');
+            toast(errData.error || 'Account is inactive. Contact admin.','error');return;
+          }
           toast(errData.error||'Role mismatch','error');return;
         }
       }
@@ -560,6 +596,13 @@ async function doLogin(){
       }else{toast(data.error||'Login failed','error');return;}
     }else{
       const data=await resp.json().catch(()=>({}));
+      // ── CHECK: Inactive/Archived User Account ────
+      if(resp && resp.status===403){
+        if(data.error && data.error.includes('inactive')){
+          console.warn('[AUTH] User account is inactive/archived');
+          toast(data.error || 'Your account is inactive. Contact admin.','error');return;
+        }
+      }
       toast(data.error||'Login failed','error');
     }
   }catch(e){
@@ -732,6 +775,7 @@ function renderModule(id){
     's-dashboard':renderStudentDashboard,'s-calendar':renderStudentCalendar,'s-timetable':renderStudentTimetable,
     's-communities':renderSubjectCommunities,'s-cbcs':renderCBCS,'s-online':renderStudentOnlineClass,
     's-library':renderDigitalLibrary,'s-performance':renderStudentPerformance,'s-attendance':renderStudentAttendance,
+    's-qr-scanner':renderStudentQRScanner,
     's-fees':renderStudentFees,'s-exam-reg':renderExamReg,'s-sem-reg':renderSemReg,'s-supple':renderSuppleReg,
     's-reval':renderRevaluation,'s-grace':renderGraceMark,'s-survey':renderInterimSurvey,
     's-exit':renderExitSurvey,'s-grievance':renderGrievance,'s-evaluation':renderStaffEval,
@@ -744,7 +788,8 @@ function renderModule(id){
     'f-rules':renderFacultyRules,'f-committee':renderFacultyCommittee,
     'f-examduty':renderFacultyExamDuty,
     'f-obe':renderOBE,'f-lesson':renderLessonPlanner,'f-online':renderFacultyOnlineClass,
-    'f-materials':renderCourseMaterials,'f-attendance':renderFacultyAttendance,'f-subject-students':renderFacultySubjectStudents,
+    'f-materials':renderCourseMaterials,'f-attendance':renderFacultyAttendance,
+    'f-qr-generator':renderFacultyQRGenerator,'f-qr-records':renderFacultyAttendanceRecords,
     'f-assessments':renderAssessments,'f-assignments':renderAssignments,'f-internal':renderInternalExam,
     'f-qpaper':renderQuestionPaper,'f-coursefile':renderCourseFile,'f-marks':renderMarkComputation,
     'f-reports':renderCustomReports,'f-onlineexam':renderOnlineExam,'f-staffrpt':renderStaffReport,
@@ -756,9 +801,9 @@ function renderModule(id){
     'a-announcements':renderAdminAnnouncements,'a-online-classes':renderAdminOnlineClasses,'a-courses':renderAdminCourses,
     'a-calendar':renderAdminCalendar,'a-library':renderAdminLibrary,'a-communities':renderAdminCommunities,'a-send-notif':renderAdminSendNotif,
     'a-committee':renderAdminCommittee,'a-exam':renderAdminExamModule,
-    'a-bulk-enroll':renderBulkEnrollment,
     'a-s-attendance':renderAdminAttendance,'a-s-fees':renderAdminFees,'a-s-performance':renderAdminPerformance,
     'a-s-leave':renderAdminLeave,'a-s-placement':renderAdminPlacement,'a-s-grievance':renderAdminGrievances,
+    'a-qr-dashboard':renderAdminQRDashboard,
     'a-assessments':renderAssessments,
   };
   return (map[id]||renderComingSoon)(id);
@@ -774,12 +819,194 @@ function renderComingSoon(id){
 
 function bindModuleEvents(id){
   if(id==='s-attendance') initStudentAttendance();
+  if(id==='s-qr-scanner') initStudentQRScanner();
   if(id==='f-attendance') initFacultyAttendance();
-  if(id==='f-subject-students') initFacultySubjectStudents();
+  if(id==='f-qr-generator') initFacultyQRGenerator();
+  if(id==='f-qr-records') initFacultyAttendanceRecords();
   if(id==='a-register')   initFaceRegistration();
   if(id==='a-users')      loadUserList();
-  if(id==='a-bulk-enroll') loadBulkEnrollmentForm();
+  if(id==='a-qr-dashboard') initAdminQRDashboard();
 }
+
+// ── QR ATTENDANCE MODULES ─────────────────────────────────
+// Student QR Scanner
+function renderStudentQRScanner(){
+  return '<div id="qrScannerContainer" class="card"></div>';
+}
+
+function initStudentQRScanner(){
+  if(window.QRAttendance && window.QRAttendance.studentScanner){
+    QRAttendance.studentScanner.init('qrScannerContainer');
+  } else {
+    toast('QR Scanner module not loaded','error');
+  }
+}
+
+// Faculty QR Generator
+function renderFacultyQRGenerator(){
+  return '<div id="qrGeneratorContainer" class="card"></div>';
+}
+
+function initFacultyQRGenerator(){
+  if(window.QRAttendance && window.QRAttendance.teacherGenerator){
+    QRAttendance.teacherGenerator.init('qrGeneratorContainer');
+  } else {
+    toast('QR Generator module not loaded','error');
+  }
+}
+
+// Faculty Attendance Records
+function renderFacultyAttendanceRecords(){
+  return '<div id="qrRecordsContainer" class="card"><div class="page-loader"><div class="loader-ring"></div></div></div>';
+}
+
+function initFacultyAttendanceRecords(){
+  const container = document.getElementById('qrRecordsContainer');
+  if(!container) return;
+  
+  // Fetch and display faculty's class attendance records
+  const courseName = AMS.profile?.course_name || 'Your Class';
+  container.innerHTML = `
+    <div class="card-header">
+      <h2>Attendance Records - ${courseName}</h2>
+      <p>QR-based attendance for your classes</p>
+    </div>
+    <div class="card-content">
+      <div class="filters" style="margin-bottom: 2rem;">
+        <input type="date" id="recDate" style="padding: 0.5rem; border: 1px solid var(--border); border-radius: 0.5rem;">
+        <button onclick="loadFacultyAttendanceRecords()" class="btn btn-primary">Load Records</button>
+      </div>
+      <div id="recordsList" class="page-loader"><div class="loader-ring"></div></div>
+    </div>
+  `;
+  
+  // Set default date to today
+  document.getElementById('recDate').valueAsDate = new Date();
+  loadFacultyAttendanceRecords();
+}
+
+async function loadFacultyAttendanceRecords(){
+  const dateInput = document.getElementById('recDate');
+  const date = dateInput.valueAsDate.toISOString().split('T')[0];
+  
+  try {
+    const resp = await fetch(`${window.AMS_CONFIG.API_URL}/attendance?date=${date}`);
+    const data = await resp.json();
+    const records = data.records || [];
+    
+    let html = `<table style="width: 100%; border-collapse: collapse;">
+      <thead>
+        <tr style="background: var(--ink3); border-bottom: 2px solid var(--border);">
+          <th style="padding: 0.75rem; text-align: left;">Roll No</th>
+          <th style="padding: 0.75rem; text-align: left;">Name</th>
+          <th style="padding: 0.75rem; text-align: left;">Time</th>
+          <th style="padding: 0.75rem; text-align: left;">Method</th>
+          <th style="padding: 0.75rem; text-align: left;">Verified</th>
+        </tr>
+      </thead>
+      <tbody>`;
+    
+    if(records.length === 0){
+      html += '<tr><td colspan="5" style="padding: 1rem; text-align: center; color: var(--text2);">No records found</td></tr>';
+    } else {
+      records.forEach(r => {
+        const time = new Date(r.timestamp).toLocaleTimeString('en-IN', {hour: '2-digit', minute: '2-digit'});
+        const verified = r.verified ? '✅ Yes' : '⚠️ Pending';
+        html += `<tr style="border-bottom: 1px solid var(--border);">
+          <td style="padding: 0.75rem;">${r.roll_no || '–'}</td>
+          <td style="padding: 0.75rem;">${r.name || '–'}</td>
+          <td style="padding: 0.75rem;">${time}</td>
+          <td style="padding: 0.75rem;">${r.method || 'qr'}</td>
+          <td style="padding: 0.75rem;">${verified}</td>
+        </tr>`;
+      });
+    }
+    html += '</tbody></table>';
+    
+    document.getElementById('recordsList').innerHTML = html;
+  } catch(e){
+    console.error('[Records] Error:', e);
+    document.getElementById('recordsList').innerHTML = `<div class="empty"><div class="empty-text">Error loading records</div></div>`;
+  }
+}
+
+// Admin QR Dashboard
+function renderAdminQRDashboard(){
+  setTimeout(()=>loadAdminQRDashboard(),50);
+  return `<div class="card">
+    <div class="card-header">
+      <div class="card-title">📈 QR Attendance Dashboard</div>
+      <span class="badge badge-blue text-xs">Live</span>
+    </div>
+    <div id="adminQRDashboardContainer"><div class="text-muted text-sm" style="padding:1rem">Loading dashboard…</div></div>
+  </div>`;
+}
+
+function loadAdminQRDashboard(){
+  const container = document.getElementById('adminQRDashboardContainer');
+  if(!container) return;
+  
+  (async () => {
+    try {
+      const res = await fetch(`${window.AMS_CONFIG.API_URL}/api/attendance/dashboard`);
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+      
+      const data = await res.json();
+      
+      if(data.summary) {
+        // Show summary stats
+        container.innerHTML = `<div style="padding: 1rem;">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+            <div style="background: var(--ink3); padding: 1rem; border-radius: var(--radius); text-align: center;">
+              <div style="font-size: 1.5rem; font-weight: 700; color: var(--blue3);">${data.summary.total_sessions || 0}</div>
+              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Total Sessions</div>
+            </div>
+            <div style="background: var(--ink3); padding: 1rem; border-radius: var(--radius); text-align: center;">
+              <div style="font-size: 1.5rem; font-weight: 700; color: var(--green2);">${data.summary.verified_attendance || 0}</div>
+              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Verified</div>
+            </div>
+            <div style="background: var(--ink3); padding: 1rem; border-radius: var(--radius); text-align: center;">
+              <div style="font-size: 1.5rem; font-weight: 700; color: var(--orange);">${data.summary.pending_attendance || 0}</div>
+              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Pending</div>
+            </div>
+            <div style="background: var(--ink3); padding: 1rem; border-radius: var(--radius); text-align: center;">
+              <div style="font-size: 1.5rem; font-weight: 700; color: var(--teal);">${Math.round((data.summary.verification_rate || 0) * 100)}%</div>
+              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Verification Rate</div>
+            </div>
+          </div>
+          ${data.today ? `<div style="background: var(--ink2); padding: 1rem; border-radius: var(--radius); border-left: 3px solid var(--blue);">
+            <div style="font-weight: 600; margin-bottom: 0.5rem;">Today's Statistics</div>
+            <div style="font-size: 0.85rem; color: var(--text2);">
+              ${data.today.sessions || 0} sessions • ${data.today.students || 0} students marked
+            </div>
+          </div>` : ''}
+        </div>`;
+      } else if(Array.isArray(data)) {
+        // Render as table if array
+        container.innerHTML = window.renderDataTable ? window.renderDataTable(data) : JSON.stringify(data);
+      } else {
+        container.innerHTML = '<div class="text-muted text-sm" style="padding:1rem">No dashboard data available</div>';
+      }
+    } catch(e) {
+      console.error('[QR Dashboard]', e);
+      container.innerHTML = `<div style="padding: 1rem; background: #fee; border: 1px solid #faa; border-radius: var(--radius); color: #c00;">
+        Error loading dashboard: ${e.message}
+      </div>`;
+    }
+  })();
+}
+
+function initAdminQRDashboard(){
+  // Dashboard data loads automatically from renderAdminQRDashboard
+  // This is a fallback in case of missing dependencies
+  const container = document.getElementById('adminQRDashboardContainer');
+  if(container && !container.querySelector('.card')) {
+    loadAdminQRDashboard();
+  }
+}
+
+// Admin QR Settings
+
 
 // ==========================================================
 //  STUDENT MODULES
@@ -813,32 +1040,42 @@ function renderStudentDashboard(){
 async function loadStudentDashboardData(){
   try {
     const uid = AMS.user.id || AMS.user.username || 'unknown';
-    // 1. Fetch user profile from RTDB
-    const profile = await DB.get(`/users/${uid}`);
-    if(profile){
-      document.getElementById('sd-att') && (document.getElementById('sd-att').textContent = (profile.attendance_rate||'—') + (profile.attendance_rate?'%':''));
-      document.getElementById('sd-cgpa') && (document.getElementById('sd-cgpa').textContent = profile.cgpa||'—');
-      document.getElementById('sd-tasks') && (document.getElementById('sd-tasks').textContent = profile.pending_tasks||'0');
-      document.getElementById('sd-fees') && (document.getElementById('sd-fees').textContent = profile.fees_due ? '₹'+Number(profile.fees_due).toLocaleString() : '₹0');
+    // 1. Fetch user profile from RTDB with fallback
+    try {
+      const profile = await DB.get(`/users/${uid}`);
+      if(profile){
+        document.getElementById('sd-att') && (document.getElementById('sd-att').textContent = (profile.attendance_rate||'—') + (profile.attendance_rate?'%':''));
+        document.getElementById('sd-cgpa') && (document.getElementById('sd-cgpa').textContent = profile.cgpa||'—');
+        document.getElementById('sd-tasks') && (document.getElementById('sd-tasks').textContent = profile.pending_tasks||'0');
+        document.getElementById('sd-fees') && (document.getElementById('sd-fees').textContent = profile.fees_due ? '₹'+Number(profile.fees_due).toLocaleString() : '₹0');
+      }
+    } catch(err) {
+      console.warn('[Dashboard] Profile RTDB error:', err);
     }
-    // 2. Announcements from RTDB (real-time listener)
+    // 2. Announcements from RTDB (real-time listener) with fallback
     const annoEl=document.getElementById('sd-announcements');
     if(annoEl){
-      DB.listen('/announcements', data => {
-        if(!data){ annoEl.innerHTML='<div class="text-muted text-sm" style="padding:1rem">No announcements.</div>'; return; }
-        const items=Object.values(data).sort((a,b)=>b.timestamp-a.timestamp).slice(0,5);
-        annoEl.innerHTML=items.map(a=>`<div class="announcement ${a.type||'info'}">
-          <div class="ann-title">${a.title||''}</div>
-          <div class="text-sm text-muted">${a.message||a.msg||''}</div>
-          <div class="ann-meta mt-sm">${a.time||new Date(a.timestamp).toLocaleTimeString()}</div>
-        </div>`).join('');
-      });
+      try {
+        DB.listen('/announcements', data => {
+          if(!data){ annoEl.innerHTML='<div class="text-muted text-sm" style="padding:1rem">No announcements.</div>'; return; }
+          const items=Object.values(data).sort((a,b)=>b.timestamp-a.timestamp).slice(0,5);
+          annoEl.innerHTML=items.map(a=>`<div class="announcement ${a.type||'info'}">
+            <div class="ann-title">${a.title||''}</div>
+            <div class="text-sm text-muted">${a.message||a.msg||''}</div>
+            <div class="ann-meta mt-sm">${a.time||new Date(a.timestamp).toLocaleTimeString()}</div>
+          </div>`).join('');
+        });
+      } catch(err) {
+        console.warn('[Dashboard] Announcements RTDB error:', err);
+        annoEl.innerHTML='<div class="text-muted text-sm" style="padding:1rem">Announcements unavailable</div>';
+      }
     }
-    // 3. Events from RTDB
+    // 3. Events from RTDB with fallback
     const evEl=document.getElementById('sd-events');
-    const events = await DB.get('/events');
-    if(evEl){
-      if(events){
+    try {
+      const events = await DB.get('/events');
+      if(evEl){
+        if(events){
         const list=Object.values(events).sort((a,b)=>new Date(a.date)-new Date(b.date)).slice(0,4);
         evEl.innerHTML=list.map(e=>`<div class="tl-item">
           <div class="tl-date">${e.date}</div>
@@ -848,6 +1085,9 @@ async function loadStudentDashboardData(){
       } else {
         evEl.innerHTML='<div class="text-muted text-sm" style="padding:.5rem">No upcoming events.</div>';
       }
+      }
+    } catch(e) {
+      console.warn('[Dashboard] Events RTDB error:', e);
     }
     // 4. Attendance bars — use new cumulative report API
     const barsEl=document.getElementById('sd-attbars');
@@ -1447,6 +1687,17 @@ async function startFaceAtt(){
     body.innerHTML=`<div class="att-status"><div class="att-icon-wrap error">⚠️</div><h3 class="text-red">Face Recognition Disabled</h3><p class="text-muted">Faculty has not enabled face recognition for this session.</p><button class="btn btn-primary mt-md" onclick="resetAtt()">OK</button></div>`;
     return;
   }
+  
+  // Check if within attendance window
+  if(!isWithinAttendanceWindow()){
+    const endTime = (AMS.systemConfig && AMS.systemConfig.attendance_window_end) ? AMS.systemConfig.attendance_window_end : '18:00';
+    document.getElementById('faceAttSection').style.display='block';
+    const body=document.getElementById('faceAttBody');
+    body.innerHTML=`<div class="att-status"><div class="att-icon-wrap error">⏰</div><h3 class="text-red">Attendance Window Closed</h3><p class="text-muted">Attendance marking is closed after ${endTime}.</p><p style="color:#f85149;font-weight:600;margin-top:.5rem">Status: ABSENT</p><button class="btn btn-outline mt-md" onclick="resetAtt()">OK</button></div>`;
+    toast(`⏰ Attendance window closed after ${endTime}. Status marked ABSENT.`,'warning');
+    return;
+  }
+  
   document.getElementById('faceAttSection').style.display='block';
   document.getElementById('attPanel').style.display='none';
   const body=document.getElementById('faceAttBody');
@@ -1455,7 +1706,9 @@ async function startFaceAtt(){
     const loc=await getLocation();
     const inCampus=isInCollege(loc.lat,loc.lng);
     if(!inCampus){
-      body.innerHTML=`<div class="att-status"><div class="att-icon-wrap error">📍</div><h3 class="text-red">Not in Campus</h3><p class="text-muted">You must be within college premises.</p><button class="btn btn-outline mt-md" onclick="resetAtt()">Go Back</button></div>`;
+      const geofence = getGeofenceSettings();
+      const distance = haversineKm(loc.lat,loc.lng,geofence.lat,geofence.lng).toFixed(2);
+      body.innerHTML=`<div class="att-status"><div class="att-icon-wrap error">📍</div><h3 class="text-red">Not in Campus</h3><p class="text-muted">You must be within college premises (within ${(geofence.radiusKm).toFixed(2)} km).</p><p style="color:#f85149;font-size:0.85rem">You are ${distance} km away from campus center</p><button class="btn btn-outline mt-md" onclick="resetAtt()">Go Back</button></div>`;
       return;
     }
     body.innerHTML=`<div class="camera-wrap" id="attCameraWrap">
@@ -1630,11 +1883,11 @@ async function startQRScan(){
     <div style="padding:1.5rem">
       <p class="text-muted mb-md">Enter your details, then point your camera at the faculty QR code.</p>
       <div class="form-group">
-        <label>Roll Number</label>
+        <label for="qrRollInput">Roll Number</label>
         <input id="qrRollInput" class="input" value="${autoRoll}" placeholder="e.g. 20261CSE0001" style="width:100%;padding:.6rem .9rem;background:var(--ink3);border:1px solid var(--border);border-radius:8px;color:var(--text)"/>
       </div>
       <div class="form-group mt-sm">
-        <label>Full Name</label>
+        <label for="qrNameInput">Full Name</label>
         <input id="qrNameInput" class="input" value="${autoName}" placeholder="Your full name" style="width:100%;padding:.6rem .9rem;background:var(--ink3);border:1px solid var(--border);border-radius:8px;color:var(--text)"/>
       </div>
       <button class="btn btn-primary" style="width:100%;margin-top:1rem" onclick="startQRCameraAfterForm()">📱 Start QR Scanner</button>
@@ -1679,6 +1932,7 @@ function scanQRLoop(video){
       canvas.height=video.videoHeight; canvas.width=video.videoWidth;
       ctx.drawImage(video,0,0);
       const img=ctx.getImageData(0,0,canvas.width,canvas.height);
+      if(typeof jsQR === 'undefined'){console.warn('[QR] jsQR not available');return;}
       const code=jsQR(img.data,img.width,img.height);
       if(code && code.data.startsWith('AMSQR:')){stopCamera();processQRAttendance(code.data);return;}
     }
@@ -1699,12 +1953,29 @@ async function processQRAttendance(qrData){
   const body=document.getElementById('qrScanBody');
   body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading" style="animation:spin 1.2s linear infinite">📍</div><p>Getting your location…</p></div>`;
   try{
-    // 1. Get GPS
+    // 1. Check attendance window first
+    if(!isWithinAttendanceWindow()){
+      const endTime = (AMS.systemConfig && AMS.systemConfig.attendance_window_end) ? AMS.systemConfig.attendance_window_end : '18:00';
+      body.innerHTML=`<div class="att-status"><div class="att-icon-wrap error">⏰</div><h3 class="text-red">Attendance Window Closed</h3><p class="text-muted">Attendance marking is closed after ${endTime}.</p><p style="color:#f85149;font-weight:600;margin-top:.5rem">Status: ABSENT</p><button class="btn btn-outline mt-md" onclick="resetAtt()">OK</button></div>`;
+      toast(`⏰ Attendance window closed after ${endTime}. Status marked ABSENT.`,'warning');
+      return;
+    }
+    
+    // 2. Get GPS
     const loc=await getLocation();
     _qrSession.lat=loc.lat;
     _qrSession.lng=loc.lng;
 
-    // 2. Validate QR against backend to get session details
+    // 3. Validate location is within geofence
+    if(!isInCollege(loc.lat,loc.lng)){
+      const geofence = getGeofenceSettings();
+      const distance = haversineKm(loc.lat,loc.lng,geofence.lat,geofence.lng).toFixed(2);
+      body.innerHTML=`<div class="att-status"><div class="att-icon-wrap error">📍</div><h3 class="text-red">Not in Campus</h3><p class="text-muted">You must be within college premises (within ${(geofence.radiusKm).toFixed(2)} km).</p><p style="color:#f85149;font-size:0.85rem">You are ${distance} km away from campus center</p><button class="btn btn-outline mt-md" onclick="resetAtt()">Go Back</button></div>`;
+      toast('❌ You are outside the campus geofence. Cannot mark attendance.','error');
+      return;
+    }
+
+    // 4. Validate QR against backend to get session details
     try{
       const valRes=await fetch(`${window.AMS_CONFIG.API_URL}/api/qr/validate`,{
         method:'POST',
@@ -1720,7 +1991,7 @@ async function processQRAttendance(qrData){
       }
     }catch(ve){console.warn('[QR-VALIDATE]',ve);}
 
-    // 3. Open face verification camera
+    // 5. Open face verification camera
     body.innerHTML=`
       <div class="camera-wrap">
         <video id="qrFaceVideo" autoplay playsinline></video>
@@ -2283,12 +2554,17 @@ function loadNoticeBoardRTDB(){
       </div>`).join('');
   };
   if(window.DB){
-    DB.listen('/announcements',snap=>{
-      if(!document.getElementById('notices-list'))return;
-      const data=snap.val();
-      if(!data){el.innerHTML='<div class="text-muted text-sm">No notices at this time.</div>';return;}
-      render(Object.values(data));
-    });
+    try {
+      DB.listen('/announcements',snap=>{
+        if(!document.getElementById('notices-list'))return;
+        const data=snap.val();
+        if(!data){el.innerHTML='<div class="text-muted text-sm">No notices at this time.</div>';return;}
+        render(Object.values(data));
+      });
+    } catch(err) {
+      console.warn('[Announcements] RTDB error:', err);
+      el.innerHTML='<div class="text-muted text-sm">Notices unavailable</div>';
+    }
   }else{
     fetch('/api/announcements').then(r=>r.json())
       .then(data=>render(Array.isArray(data)?data:(data.announcements||[])))
@@ -2947,10 +3223,10 @@ function renderFacultyStudentLeave(){
       <div class="form-group"><label>Leave Type</label>
         <select><option>--All--</option><option>Medical</option><option>Personal</option><option>Emergency</option><option>Duty Leave</option></select>
       </div>
-      <div class="form-group"><label>Leave From</label><input type="date"/></div>
-      <div class="form-group"><label>Leave To</label><input type="date"/></div>
-      <div class="form-group"><label>Student Name</label><input placeholder="Student name"/></div>
-      <div class="form-group"><label>Roll No</label><input placeholder="Roll number"/></div>
+      <div class="form-group"><label for="leaveFrom">Leave From</label><input id="leaveFrom" type="date"/></div>
+      <div class="form-group"><label for="leaveTo">Leave To</label><input id="leaveTo" type="date"/></div>
+      <div class="form-group"><label for="leaveStudentName">Student Name</label><input id="leaveStudentName" placeholder="Student name"/></div>
+      <div class="form-group"><label for="leaveRollNo">Roll No</label><input id="leaveRollNo" placeholder="Roll number"/></div>
       <div class="form-group" style="margin-top:auto">
         <button class="btn btn-primary" onclick="toast('Leaves loaded','success')">Search</button>
         <button class="btn btn-outline" style="margin-left:.5rem" onclick="toast('Filters reset','info')">Reset</button>
@@ -3961,8 +4237,9 @@ async function loadTodayAttendance(){
 
   // Real-time RTDB listener for today's attendance
   if(window.DB){
-    const path = `/attendance/${today}`;
-    _facAttUnsubscribe = DB.listen(path, data => {
+    try {
+      const path = `/attendance/${today}`;
+      _facAttUnsubscribe = DB.listen(path, data => {
       let present=0, absent=0, below75=0;
       if(data){
         Object.values(data).forEach(session => {
@@ -3983,9 +4260,13 @@ async function loadTodayAttendance(){
       const be=document.getElementById('attBelow'); if(be) be.textContent=b75;
       // Update manual attendance table if open
       _updateManualAttFromRTDB(data, course, today);
-    });
-    // Also trigger initial load via backend for existing Supabase records
-    _loadAttendanceFromBackend(today, course);
+      });
+      // Also trigger initial load via backend for existing Supabase records
+      _loadAttendanceFromBackend(today, course);
+    } catch(err) {
+      console.warn('[Attendance] RTDB error:', err);
+      _loadAttendanceFromBackend(today, course);
+    }
   } else {
     _loadAttendanceFromBackend(today, course);
   }
@@ -5807,65 +6088,46 @@ async function loadAdminDashboardData(){
   try{
     const today=new Date().toISOString().slice(0,10);
 
-    // Real-time totals from RTDB
-    if(window.DB){
-      DB.listen('/users', data=>{
-        if(!data) return;
-        const vals=Object.values(data);
-        const students=vals.filter(u=>u.role==='student').length;
-        const faculty=vals.filter(u=>u.role==='faculty').length;
-        const el_s=document.getElementById('ad-students'); if(el_s) el_s.textContent=String(students);
-        const el_f=document.getElementById('ad-faculty'); if(el_f) el_f.textContent=String(faculty);
-      });
-
-      // Today's attendance
-      DB.listen(`/attendance/${today}`, data=>{
-        let present=0,total=0;
-        if(data){
-          Object.values(data).forEach(session=>{
-            if(typeof session!=='object') return;
-            Object.values(session).forEach(rec=>{
-              total++;
-              if(rec.status==='present') present++;
-            });
-          });
-        }
-        const pct=total?Math.round(present/total*100):0;
-        const el=document.getElementById('adminAvgAtt'); if(el) el.textContent=pct+'%';
-        const chart=document.getElementById('ad-attchart');
-        if(chart){
-          chart.innerHTML=`<div class="bar-row">
-            <div class="bar-label text-xs">Present</div>
-            <div class="bar-fill"><div class="bar-inner" style="width:${pct}%;background:linear-gradient(90deg,var(--blue),var(--teal))"></div></div>
-            <div class="bar-val text-xs">${present}/${total}</div>
-          </div>
-          <p class="text-muted text-sm" style="margin-top:.5rem">Real-time count — updates as students check in.</p>`;
-        }
-      });
-
-      // Recent activity from RTDB
-      const actEl=document.getElementById('ad-activity');
-      if(actEl){
-        DB.listen(`/attendance/${today}`, data=>{
-          if(!data){ actEl.innerHTML='<div class="text-muted text-sm" style="padding:1rem">No activity today.</div>'; return; }
-          let rows=[];
-          Object.values(data).forEach(session=>{
-            if(typeof session!=='object') return;
-            Object.entries(session).forEach(([roll,rec])=>{
-              rows.push({roll,name:rec.name||'—',status:rec.status||'—',subject:rec.subject||'—',face:rec.face_verified,ts:rec.timestamp||0});
-            });
-          });
-          rows.sort((a,b)=>b.ts-a.ts);
-          actEl.innerHTML=`<div class="tbl-wrap"><table>
-            <thead><tr><th>Roll No</th><th>Name</th><th>Subject</th><th>Face</th><th>Status</th><th>Time</th></tr></thead>
-            <tbody>${rows.slice(0,20).map(r=>`<tr>
-              <td class="fw-semibold">${r.roll}</td><td>${r.name}</td><td>${r.subject}</td>
-              <td>${r.face?'✅':'❌'}</td>
-              <td><span class="badge badge-${r.status==='present'?'green':'red'}">${r.status}</span></td>
-              <td style="font-size:.8rem">${r.ts?new Date(r.ts).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}):'—'}</td>
-            </tr>`).join('')}</tbody>
-          </table></div>`;
+    // Try Firebase RTDB first, fall back to backend API if unavailable
+    if(window.rtdb && window.DB){
+      try {
+        // Real-time user counts from RTDB
+        DB.listen('/users', data=>{
+          if(!data) return;
+          const vals=Object.values(data);
+          const students=vals.filter(u=>u.role==='student').length;
+          const faculty=vals.filter(u=>u.role==='faculty').length;
+          const el_s=document.getElementById('ad-students'); if(el_s) el_s.textContent=String(students);
+          const el_f=document.getElementById('ad-faculty'); if(el_f) el_f.textContent=String(faculty);
         });
+
+        // Today's attendance from RTDB
+        DB.listen(`/attendance/${today}`, data=>{
+          let present=0,total=0;
+          if(data){
+            Object.values(data).forEach(session=>{
+              if(typeof session!=='object') return;
+              Object.values(session).forEach(rec=>{
+                total++;
+                if(rec.status==='present') present++;
+              });
+            });
+          }
+          const pct=total?Math.round(present/total*100):0;
+          const el=document.getElementById('adminAvgAtt'); if(el) el.textContent=pct+'%';
+          const chart=document.getElementById('ad-attchart');
+          if(chart){
+            chart.innerHTML=`<div class="bar-row">
+              <div class="bar-label text-xs">Present</div>
+              <div class="bar-fill"><div class="bar-inner" style="width:${pct}%;background:linear-gradient(90deg,var(--blue),var(--teal))"></div></div>
+              <div class="bar-val text-xs">${present}/${total}</div>
+            </div>
+            <p class="text-muted text-sm" style="margin-top:.5rem">Real-time count — updates as students check in.</p>`;
+          }
+        });
+      } catch(rtdbErr) {
+        console.warn('[Admin Dashboard] RTDB error:', rtdbErr);
+        // Fall through to backend API below
       }
     }
 
@@ -6260,9 +6522,9 @@ function renderAdminTimetableMgmt(){
 <div class="card" style="padding:.5rem 1rem;margin-bottom:.75rem">
   <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
     <span style="font-weight:700;font-size:1rem;margin-right:.5rem">🗓️ Timetable Management</span>
-    ${['grid','upload','workload','conflicts','assignments','manual','delete','generator'].map(t=>
-      `<button class="btn btn-sm ${t==='grid'?'btn-primary':'btn-outline'}${t==='delete'?' btn-danger':''}" id="ttTab_${t}" onclick="ttInitTab('${t}')">${
-        {grid:'📅 Grid',upload:'📤 Upload Excel',workload:'👨‍💼 Workload',conflicts:'⚠️ Conflicts',assignments:'📋 Assignments',manual:'✏️ Manual Edit',delete:'🗑️ Delete Timetable',generator:'⚡ Auto-Generate'}[t]
+    ${['grid','upload','workload','conflicts','assignments','manual','delete','generator','archive'].map(t=>
+      `<button class="btn btn-sm ${t==='grid'?'btn-primary':'btn-outline'}${t==='delete'?' btn-danger':''}${t==='archive'?'btn-purple':''}" id="ttTab_${t}" onclick="ttInitTab('${t}')">${
+        {grid:'📅 Grid',upload:'📤 Upload Excel',workload:'👨‍💼 Workload',conflicts:'⚠️ Conflicts',assignments:'📋 Assignments',manual:'✏️ Manual Edit',delete:'🗑️ Delete Timetable',generator:'⚡ Auto-Generate',archive:'📦 Archive'}[t]
       }</button>`
     ).join('')}
     <a href="${window.AMS_CONFIG.API_URL}/api/timetable/excel-template" download="timetable_template.xlsx" class="btn btn-teal btn-sm" style="margin-left:auto">📥 Download Excel Template</a>
@@ -6372,10 +6634,13 @@ function renderAdminTimetableMgmt(){
 // ── Tab initialization ─────────────────────────────────────────
 function ttInitTab(tab){
   TT.activeTab = tab;
-  ['grid','upload','workload','conflicts','assignments','manual','delete','generator'].forEach(t=>{
+  ['grid','upload','workload','conflicts','assignments','manual','delete','generator','archive'].forEach(t=>{
     const btn = document.getElementById(`ttTab_${t}`);
     if(btn){
-      btn.className = `btn btn-sm ${t===tab?(t==='delete'?'btn-danger':'btn-primary'):(t==='delete'?'btn-outline btn-danger-outline':'btn-outline')}`;
+      let btnClass = `btn btn-sm `;
+      if(t===tab) btnClass += t==='delete'?'btn-danger':t==='archive'?'btn-purple':'btn-primary';
+      else btnClass += t==='delete'?'btn-outline btn-danger-outline':t==='archive'?'btn-outline':'btn-outline';
+      btn.className = btnClass;
     }
   });
   const content = document.getElementById('ttTabContent');
@@ -6388,6 +6653,7 @@ function ttInitTab(tab){
     case 'assignments': ttRenderAssignmentsTab(content); break;
     case 'manual':      ttRenderManualTab(content);      break;
     case 'delete':      ttRenderDeleteTab(content);      break;
+    case 'archive':     ttRenderArchiveTab(content);     break;
     case 'generator':   
       setTimeout(() => {
         if(typeof ttGeneratorInit === 'function'){
@@ -7190,7 +7456,7 @@ function ttToggleSelectAllFaculty(checked){
 async function ttDeleteOneFaculty(key, displayName){
   const f = TT_DEL.facultyMap[key];
   if(!f) return;
-  if(!confirm(`Delete all ${f.ids.length} timetable slot(s) for "${displayName}"?\n\nThis cannot be undone.`)) return;
+  if(!confirm(`Delete all ${f.ids.length} timetable slot(s) for "${displayName}"?  This cannot be undone.`)) return;
   try{
     const body = {};
     if(f.username) body.faculty_username = f.username;
@@ -7218,7 +7484,7 @@ async function ttDeleteSelectedFaculty(){
   const selectedKeys = chks.map(c=>c.dataset.key);
   const names = selectedKeys.map(k=>TT_DEL.facultyMap[k]?.name||k).join(', ');
   const totalSlots = selectedKeys.reduce((s,k)=>s+(TT_DEL.facultyMap[k]?.ids.length||0),0);
-  if(!confirm(`Delete all timetable entries for ${selectedKeys.length} faculty member(s)?\n(${names})\n\n${totalSlots} total slots will be removed. This cannot be undone.`)) return;
+  if(!confirm(`Delete all timetable entries for ${selectedKeys.length} faculty member(s)? (${names})  ${totalSlots} total slots will be removed. This cannot be undone.`)) return;
   let ok=0, fail=0;
   for(const key of selectedKeys){
     const f = TT_DEL.facultyMap[key];
@@ -7244,7 +7510,7 @@ async function ttDeleteSelectedFaculty(){
 }
 
 async function ttDeleteAllTimetable(){
-  if(!confirm('⚠️ DELETE ENTIRE TIMETABLE?\n\nThis will permanently remove ALL timetable entries for ALL faculty.\nThis action CANNOT be undone.\n\nAre you absolutely sure?')) return;
+  if(!confirm('⚠️ DELETE ENTIRE TIMETABLE?  This will permanently remove ALL timetable entries for ALL faculty. This action CANNOT be undone.  Are you absolutely sure?')) return;
   if(!confirm('Final confirmation: Delete ALL timetable entries now?')) return;
   try{
     const r = await fetch(`${window.AMS_CONFIG.API_URL}/api/timetable/delete-all`, {method:'DELETE'});
@@ -7256,6 +7522,126 @@ async function ttDeleteAllTimetable(){
       toast('Delete failed: '+(d.error||'unknown'), 'error');
     }
   }catch(ex){ toast('Error: '+ex.message, 'error'); }
+}
+
+// ─────────────────────────────────────────────────────────────
+// ARCHIVE TAB—Restore or permanently delete archived timetable
+// ─────────────────────────────────────────────────────────────
+function ttRenderArchiveTab(container){
+  container.innerHTML = `
+<div class="card" style="border:2px solid #9333ea">
+  <div class="card-header" style="background:#fef3f2;border-bottom:1px solid #d4a5f7">
+    <div class="card-title" style="color:#9333ea">📦 Timetable Archive</div>
+    <span style="font-size:.83rem;color:#6b21a8">View deleted timetable entries and restore or permanently delete them</span>
+  </div>
+  <div style="padding:.75rem 1rem;border-bottom:1px solid var(--border)">
+    <button class="btn btn-outline btn-sm" onclick="ttLoadArchiveTab()">🔄 Refresh Archive</button>
+  </div>
+  <div id="ttArchiveList" style="padding:1.5rem">
+    <p style="color:var(--text3);text-align:center;padding:2rem">Loading archived timetable entries…</p>
+  </div>
+</div>`;
+  ttLoadArchiveTab();
+}
+
+async function ttLoadArchiveTab(){
+  const container = document.getElementById('ttArchiveList');
+  if(!container) return;
+  container.innerHTML = '<p style="color:var(--text3);text-align:center;padding:2rem">Loading…</p>';
+  
+  try {
+    const resp = await fetch(`${window.AMS_CONFIG.API_URL}/api/archive/timetable?limit=100&offset=0`);
+    const data = await resp.json();
+    
+    if(!data.success) throw new Error(data.error || 'Failed to load archive');
+    
+    const entries = data.archived_timetable || [];
+    if(entries.length === 0){
+      container.innerHTML = '<p style="color:var(--text3);text-align:center;padding:2rem">📭 No archived timetable entries</p>';
+      return;
+    }
+    
+    let html = `<table style="width:100%;border-collapse:collapse;font-size:.9rem">
+      <thead><tr style="background:var(--ink3);border-bottom:2px solid var(--border)">
+        <th style="padding:.75rem;text-align:left">Faculty</th>
+        <th style="padding:.75rem;text-align:left">Subject</th>
+        <th style="padding:.75rem;text-align:left">Batch</th>
+        <th style="padding:.75rem;text-align:left">Day</th>
+        <th style="padding:.75rem;text-align:left">Time</th>
+        <th style="padding:.75rem;text-align:left">Room</th>
+        <th style="padding:.75rem;text-align:left">Deleted</th>
+        <th style="padding:.75rem;text-align:center">Actions</th>
+      </tr></thead><tbody>`;
+    
+    entries.forEach(entry => {
+      const deletedAt = new Date(entry.deleted_at).toLocaleDateString();
+      const time = (entry.start_time || '').substring(0,5) + ' - ' + (entry.end_time || '').substring(0,5);
+      html += `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.75rem">${entry.faculty_name || '-'}</td>
+        <td style="padding:.75rem">${entry.subject || '-'}</td>
+        <td style="padding:.75rem">${entry.batch || '-'}</td>
+        <td style="padding:.75rem">${entry.day_of_week || '-'}</td>
+        <td style="padding:.75rem;font-size:.85rem">${time}</td>
+        <td style="padding:.75rem">${entry.room_number || '-'}</td>
+        <td style="padding:.75rem;color:var(--text2);font-size:.85rem">${deletedAt}</td>
+        <td style="padding:.75rem;text-align:center">
+          <button class="btn btn-sm" style="background:#10b981;color:white;border:none;margin:.25rem;padding:.2rem .5rem;font-size:.8rem" onclick="ttRestoreArchiveEntry('${entry.id}','${(entry.subject || '').replace(/'/g,'\\\'')}')">↩️ Restore</button>
+          <button class="btn btn-sm" style="background:#ef4444;color:white;border:none;margin:.25rem;padding:.2rem .5rem;font-size:.8rem" onclick="ttPurgeArchiveEntry('${entry.id}','${(entry.subject || '').replace(/'/g,'\\\'')}')">🗑️ Delete</button>
+        </td>
+      </tr>`;
+    });
+    
+    html += `</tbody></table>`;
+    container.innerHTML = html;
+    
+  }catch(e){
+    console.error('[ttLoadArchiveTab]', e);
+    container.innerHTML = `<div style="color:#ef4444;padding:1rem;background:#fef2f2;border-radius:var(--radius-sm)">Error: ${e.message}</div>`;
+  }
+}
+
+async function ttRestoreArchiveEntry(archiveId, subject){
+  if(!confirm(`Restore timetable entry for "${subject}"? It will be added back to the active schedule.`)) return;
+  
+  try {
+    const resp = await fetch(`${window.AMS_CONFIG.API_URL}/api/archive/timetable/restore`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ archive_id: archiveId })
+    });
+    
+    const data = await resp.json();
+    if(!data.success) throw new Error(data.error || 'Restore failed');
+    
+    toast(`✅ Timetable entry restored successfully!`, 'success');
+    ttLoadArchiveTab();
+    
+  }catch(e){
+    console.error('[ttRestoreArchiveEntry]', e);
+    toast(`❌ Restore failed: ${e.message}`, 'error');
+  }
+}
+
+async function ttPurgeArchiveEntry(archiveId, subject){
+  if(!confirm(`⚠️ Permanently delete "${subject}" from archive? This cannot be undone!`)) return;
+  
+  try {
+    const resp = await fetch(`${window.AMS_CONFIG.API_URL}/api/archive/timetable/purge`, {
+      method:'DELETE',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ archive_id: archiveId })
+    });
+    
+    const data = await resp.json();
+    if(!data.success) throw new Error(data.error || 'Purge failed');
+    
+    toast(`✅ Archive entry permanently deleted`, 'success');
+    ttLoadArchiveTab();
+    
+  }catch(e){
+    console.error('[ttPurgeArchiveEntry]', e);
+    toast(`❌ Purge failed: ${e.message}`, 'error');
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -7799,9 +8185,9 @@ async function _loadDeptTree(){
     console.log('[_loadDeptTree] Starting departments fetch...');
     const controller = new AbortController();
     const timeout = setTimeout(() => {
-      console.warn('[_loadDeptTree] Timeout after 8 seconds - backend may be slow');
+      console.warn('[_loadDeptTree] Timeout after 30 seconds - backend may be slow');
       controller.abort();
-    }, 8000); // 8 second timeout (backend initialization can be slow)
+    }, 30000); // 30 second timeout for cold Cloud Run startup
     
     const r = await fetch(`${window.AMS_CONFIG.API_URL}/api/departments`, {
       signal: controller.signal
@@ -7839,45 +8225,52 @@ function renderUserManagement(){
       <button class="btn btn-outline btn-sm" onclick="setUMTab('bulk')" id="umTabBulk">📥 Bulk Import</button>
       <button class="btn btn-outline btn-sm" onclick="setUMTab('assign')" id="umTabAssign">📚 Assign Subjects</button>
       <button class="btn btn-outline btn-sm" style="border-color:#ef4444;color:#ef4444" onclick="setUMTab('delete')" id="umTabDelete">🗑️ Delete Users</button>
+      <button class="btn btn-outline btn-sm" style="border-color:#9333ea;color:#9333ea" onclick="setUMTab('archive');loadArchiveUsers()" id="umTabArchive">📦 Archive</button>
     </div>
   </div>
 
   <!-- User List Tab -->
   <div id="umTabListPanel" class="card">
-    <div class="card-header">
-      <div class="card-title">👥 User Management</div>
-      <div style="display:flex;gap:.75rem;flex-wrap:wrap">
-      <div class="d-flex gap-md" style="flex-wrap:wrap">
-        <div class="search-wrap"><span class="search-icon">🔍</span><input placeholder="Search users…" id="userSearch" oninput="filterUsers(this.value)"/></div>
-        <select id="umFilterRole" onchange="umRoleFilterChanged()" style="padding:.4rem .8rem;border:1px solid var(--border);background:var(--ink3);color:var(--text);border-radius:var(--radius-sm)">
+    <div class="card-header" style="flex-wrap:wrap">
+      <div class="card-title" style="width:100%;margin-bottom:.5rem">👥 User Management</div>
+      <div class="d-flex" style="flex-wrap:wrap;gap:.5rem;width:100%">
+        <div class="search-wrap" style="flex:1;min-width:150px;max-width:300px"><span class="search-icon">🔍</span><input placeholder="Search users…" id="userSearch" oninput="filterUsers(this.value)" style="width:100%;box-sizing:border-box"/></div>
+        <select id="umFilterRole" onchange="umRoleFilterChanged()" style="padding:.4rem .8rem;border:1px solid var(--border);background:var(--ink3);color:var(--text);border-radius:var(--radius-sm);flex:0.8;min-width:80px;font-size:.9rem">
           <option value="">All Roles</option>
           <option value="student">Students</option>
           <option value="faculty">Faculty</option>
           <option value="admin">Admin</option>
         </select>
-        <select id="umFilterDept" onchange="loadUserList()" style="padding:.4rem .8rem;border:1px solid var(--border);background:var(--ink3);color:var(--text);border-radius:var(--radius-sm)">
+        <select id="umFilterDept" onchange="loadUserList()" style="padding:.4rem .8rem;border:1px solid var(--border);background:var(--ink3);color:var(--text);border-radius:var(--radius-sm);flex:1;min-width:100px;font-size:.9rem">
           <option value="">All Depts</option>
         </select>
-        <select id="umFilterSem" onchange="loadUserList()" style="display:none;padding:.4rem .8rem;border:1px solid var(--border);background:var(--ink3);color:var(--text);border-radius:var(--radius-sm)">
+        <select id="umFilterSem" onchange="loadUserList()" style="display:none;padding:.4rem .8rem;border:1px solid var(--border);background:var(--ink3);color:var(--text);border-radius:var(--radius-sm);flex:0.8;min-width:80px;font-size:.9rem">
           <option value="">All Sems</option>
           ${[1,2,3,4,5,6,7,8].map(s=>`<option value="${s}">Sem ${s}</option>`).join('')}
         </select>
-        <button class="btn btn-orange btn-sm" title="Remove duplicate roll numbers left by legacy entries" onclick="fixDuplicateRolls()">🧹 Fix Duplicates</button>
-      </div>
+        <button class="btn btn-sm" title="Remove duplicate roll numbers" onclick="fixDuplicateRolls()" style="white-space:nowrap;flex:0;padding:.5rem .9rem;font-size:.9rem;font-weight:600;background:#f59e0b;color:#fff;border:none;cursor:pointer;border-radius:var(--radius-sm);display:inline-flex;align-items:center;gap:.4rem;transition:all .2s ease">🧹 Duplicates</button>
       </div>
     </div>
-    <div id="umBulkBar" style="display:none;padding:.5rem 1rem;background:#fef2f2;border-bottom:1px solid #fca5a5;align-items:center;gap:.75rem;flex-wrap:wrap">
-      <span id="umBulkCount" style="font-size:.85rem;font-weight:600;color:#dc2626">0 selected</span>
-      <button class="btn btn-sm" style="background:#ef4444;color:#fff;border:none" onclick="umDeleteSelected()">🗑️ Delete Selected</button>
-      <button class="btn btn-outline btn-sm" onclick="umClearSelection()">✕ Clear</button>
+    <div id="umBulkBar" style="display:none;padding:.6rem 1rem;background:#fef2f2;border-bottom:2px solid #fca5a5;flex-direction:row;align-items:center;gap:1rem;flex-wrap:wrap">
+      <span id="umBulkCount" style="font-size:.85rem;font-weight:700;color:#991b1b;white-space:nowrap;flex:0">0 selected</span>
+      <button class="btn btn-sm" style="background:#3b82f6;color:#fff;border:none;cursor:pointer;padding:.5rem .9rem;border-radius:var(--radius-sm);font-weight:600;font-size:.9rem;white-space:nowrap;flex:0;display:inline-flex;align-items:center;gap:.4rem;transition:all .2s ease;box-shadow:0 2px 4px rgba(0,0,0,0.1)" onmouseover="this.style.background='#2563eb'" onmouseout="this.style.background='#3b82f6'" onclick="umArchiveSelected()">📦 Archive</button>
+      <button class="btn btn-sm" style="background:#ef4444;color:#fff;border:none;cursor:pointer;padding:.5rem .9rem;border-radius:var(--radius-sm);font-weight:600;font-size:.9rem;white-space:nowrap;flex:0;display:inline-flex;align-items:center;gap:.4rem;transition:all .2s ease;box-shadow:0 2px 4px rgba(0,0,0,0.1)" onmouseover="this.style.background='#dc2626'" onmouseout="this.style.background='#ef4444'" onclick="umDeleteSelected()">🗑️ Delete</button>
+      <button class="btn btn-outline btn-sm" style="cursor:pointer;padding:.5rem .9rem;font-size:.9rem;white-space:nowrap;flex:0;border:2px solid #999;background:#fff;color:#333;border-radius:var(--radius-sm);font-weight:600;display:inline-flex;align-items:center;gap:.4rem;transition:all .2s ease" onmouseover="this.style.background='#f3f4f6'" onmouseout="this.style.background='#fff'" onclick="umClearSelection()">✕ Clear</button>
     </div>
-    <div class="tbl-wrap"><table>
-      <thead><tr>
-        <th style="width:2rem"><input type="checkbox" id="umSelAll" title="Select all" onchange="umToggleSelectAll(this.checked)" style="cursor:pointer;width:1rem;height:1rem"/></th>
-        <th>ID / Roll</th><th>Name</th><th>Role</th><th>Dept / Info</th><th>Email</th><th>Status</th><th>Actions</th>
-      </tr></thead>
-      <tbody id="userTableBody"><tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text3)">Loading users…</td></tr></tbody>
-    </table></div>
+    <div class="tbl-wrap" style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:var(--radius-sm)">
+      <table style="min-width:100%;width:100%">
+        <thead><tr style="background:var(--ink3);border-bottom:1px solid var(--border)">
+          <th style="width:2.5rem;padding:.5rem;text-align:center"><input type="checkbox" id="umSelAll" title="Select all" onchange="umToggleSelectAll(this.checked)" style="cursor:pointer;width:1rem;height:1rem"/></th>
+          <th style="padding:.5rem;min-width:90px;font-size:.9rem">ID / Roll</th>
+          <th style="padding:.5rem;min-width:120px;font-size:.9rem">Name</th>
+          <th style="padding:.5rem;min-width:70px;font-size:.9rem">Role</th>
+          <th style="padding:.5rem;min-width:140px;font-size:.9rem">Dept / Info</th>
+          <th style="padding:.5rem;min-width:150px;font-size:.9rem">Email</th>
+          <th style="padding:.5rem;min-width:70px;font-size:.9rem">Status</th>
+          <th style="padding:.5rem;min-width:100px;font-size:.9rem">Actions</th>
+        </tr></thead>
+        <tbody id="userTableBody"><tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text3)">Loading users…</td></tr></tbody>
+      </table></div>
   </div>
 
   <!-- Add User Tab -->
@@ -7917,14 +8310,14 @@ function renderUserManagement(){
       <!-- Student-only fields -->
       <div id="newUserStudentFields" style="display:none">
         <div class="form-row">
-          <div class="form-group"><label>Batch / Section *</label>
+          <div class="form-group"><label for="newUserSection">Batch / Section *</label>
             <select id="newUserSection"><option value="">— Select Batch —</option></select>
           </div>
-          <div class="form-group"><label>Roll Number</label><input id="newUserRoll" placeholder="Auto-generated or enter manually"/></div>
+          <div class="form-group"><label for="newUserRoll">Roll Number</label><input id="newUserRoll" placeholder="Auto-generated or enter manually"/></div>
         </div>
         <div class="form-row">
-          <div class="form-group"><label>Year</label><input id="newUserYear" placeholder="e.g. 2024"/></div>
-          <div class="form-group"><label>Semester</label><input id="newUserSemester" placeholder="e.g. 1"/></div>
+          <div class="form-group"><label for="newUserYear">Year</label><input id="newUserYear" placeholder="e.g. 2024"/></div>
+          <div class="form-group"><label for="newUserSemester">Semester</label><input id="newUserSemester" placeholder="e.g. 1"/></div>
         </div>
       </div>
 
@@ -8068,6 +8461,34 @@ function renderUserManagement(){
       </div>
     </div>
 
+  <!-- Archive Tab -->
+  <div id="umTabArchivePanel" class="card" style="display:none;border:2px solid #9333ea">
+    <div class="card-header" style="background:#fef3f2;border-bottom:1px solid #d4a5f7">
+      <div class="card-title" style="color:#9333ea">📦 Deleted Users Archive</div>
+      <span style="font-size:.83rem;color:#6b21a8">View, restore, or permanently delete archived users</span>
+    </div>
+    <div style="padding:.75rem 1rem;border-bottom:1px solid var(--border)">
+      <button class="btn btn-outline btn-sm" onclick="loadArchiveUsers()">🔄 Refresh Archive</button>
+    </div>
+    <div id="archiveUsersContainer" style="padding:1.5rem">
+      <p style="color:var(--text3);text-align:center;padding:2rem">Loading archived users…</p>
+    </div>
+  </div>
+
+  <!-- Archive Timetable Tab -->
+  <div id="ttTabArchivePanel" class="card" style="display:none;border:2px solid #9333ea">
+    <div class="card-header" style="background:#fef3f2;border-bottom:1px solid #d4a5f7">
+      <div class="card-title" style="color:#9333ea">📦 Deleted Timetable Archive</div>
+      <span style="font-size:.83rem;color:#6b21a8">View, restore, or permanently delete archived timetable entries</span>
+    </div>
+    <div style="padding:.75rem 1rem;border-bottom:1px solid var(--border)">
+      <button class="btn btn-outline btn-sm" onclick="loadArchiveTimetable()">🔄 Refresh Archive</button>
+    </div>
+    <div id="archiveTimetableContainer" style="padding:1.5rem">
+      <p style="color:var(--text3);text-align:center;padding:2rem">Loading archived timetable…</p>
+    </div>
+  </div>
+
   <!-- Edit User Modal -->
   <div id="editUserModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;align-items:center;justify-content:center;overflow-y:auto">
     <div class="card" style="width:90%;max-width:560px;margin:2rem auto">
@@ -8081,18 +8502,20 @@ function renderUserManagement(){
 }
 
 function setUMTab(tab){
-  ['list','add','bulk','assign','delete'].forEach(t=>{
+  ['list','add','bulk','assign','delete','archive'].forEach(t=>{
     const panel = document.getElementById(`umTab${t.charAt(0).toUpperCase()+t.slice(1)}Panel`);
     if(panel) panel.style.display = t===tab?'block':'none';
     const btn = document.getElementById(`umTab${t.charAt(0).toUpperCase()+t.slice(1)}`);
     if(btn){
       if(t==='delete') btn.style.cssText = t===tab?'border-color:#ef4444;color:#fff;background:#ef4444':'border-color:#ef4444;color:#ef4444';
+      if(t==='archive') btn.style.cssText = t===tab?'border-color:#9333ea;color:#fff;background:#9333ea':'border-color:#9333ea;color:#9333ea';
       btn.className = t===tab?'btn btn-primary btn-sm':'btn btn-outline btn-sm';
     }
   });
   if(tab==='list') loadUserList();
   if(tab==='assign') loadAssignTable();
   if(tab==='delete'){ umLoadDeleteTab(); populateDeptDropdowns(); }
+  if(tab==='archive') loadArchiveUsers();
 }
 
 // ─ Delete Users Tab Functions ─────────────────────────────────────
@@ -8201,11 +8624,12 @@ function umUpdateBulkBar(){
   const bar = document.getElementById('umBulkBar');
   if(!bar) return;
   bar.style.display = count>0?'flex':'none';
-  const countSpan = bar.querySelector('span');
-  if(countSpan) countSpan.textContent = count===0?'0 selected':`${count} selected`;
+  const countSpan = document.getElementById('umBulkCount');
+  if(countSpan) countSpan.textContent = `${count} selected`;
   const allChk = document.getElementById('umSelAll');
   const total = document.querySelectorAll('.um-row-chk').length;
   if(allChk){ allChk.checked = count>0&&count===total; allChk.indeterminate = count>0&&count<total; }
+  console.log('[umUpdateBulkBar] Count:', count, 'Display:', bar.style.display);
 }
 
 function umClearSelection(){
@@ -8216,24 +8640,290 @@ function umClearSelection(){
 
 async function umDeleteSelected(){
   if(!window._umSelected||window._umSelected.size===0){ toast('No users selected','warning'); return; }
+  
+  // Defer heavy operations to prevent UI blocking
+  setTimeout(() => {
+    _umDeleteSelectedAsync();
+  }, 0);
+}
+
+async function _umDeleteSelectedAsync(){
+  if(!window._umSelected||window._umSelected.size===0) return;
+  
   const idArray = Array.from(window._umSelected);
+  console.log('[DELETE-BULK] Selected IDs:', idArray.length, 'users');
   if(!confirm(`Delete ${idArray.length} user(s)? This cannot be undone!`)) return;
+  
+  // Show progress modal for large deletions
+  const isLargeOp = idArray.length > 100;
+  if(isLargeOp){
+    showProgressModal(`Deleting ${idArray.length} users in batches...`, 0);
+  }
+  
+  toast('⏳ Starting bulk deletion...', 'info');
+  
   try{
-    const resp = await fetch(`${window.AMS_CONFIG.API_URL}/api/users/delete-bulk`, {
-      method:'DELETE',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({user_ids:idArray})
-    });
-    const data = await resp.json();
-    if(resp.ok){
-      toast(`✅ Deleted ${idArray.length} user(s)`,'success');
+    const batchSize = 150; // Increased from 50 to 150 for better throughput
+    const parallelBatches = 3; // Process 3 batches in parallel
+    let totalDeleted = 0;
+    let totalArchived = 0;
+    let failedBatches = 0;
+    let completedBatches = 0;
+    const totalBatches = Math.ceil(idArray.length / batchSize);
+    
+    console.log(`[DELETE-BULK] Processing ${idArray.length} users in ${totalBatches} batches (${batchSize}/batch, ${parallelBatches} parallel)`);
+    
+    // Process batches with parallel limit
+    for(let i = 0; i < totalBatches; i += parallelBatches){
+      const batchIndices = [];
+      for(let j = 0; j < parallelBatches && (i + j) < totalBatches; j++){
+        batchIndices.push(i + j);
+      }
+      
+      // Process parallel batch group
+      const parallelPromises = batchIndices.map(batchIdx => {
+        const startIdx = batchIdx * batchSize;
+        const endIdx = Math.min(startIdx + batchSize, idArray.length);
+        const batch = idArray.slice(startIdx, endIdx);
+        const batchNum = batchIdx + 1;
+        
+        return new Promise(async (resolve) => {
+          console.log(`[DELETE-BULK] Batch ${batchNum}/${totalBatches} starting: ${batch.length} users`);
+          
+          try{
+            const controller = new AbortController();
+            // Very long timeout for backend (may include Firebase sync): 3 minutes
+            const timeout = setTimeout(() => controller.abort(), 180000);
+            
+            const deleteUrl = `${window.AMS_CONFIG.API_URL}/api/users/delete-bulk`;
+            console.log(`[DELETE-BULK] Batch ${batchNum} requesting:`, {url: deleteUrl, userCount: batch.length});
+            
+            const resp = await fetch(deleteUrl, {
+              method:'DELETE',
+              headers:{
+                'Content-Type':'application/json'
+              },
+              body:JSON.stringify({
+                user_ids:batch,
+                reason:'Bulk deletion from admin panel',
+                batch_info:{current:batchNum,total:totalBatches}
+              }),
+              signal: controller.signal
+            }).catch(e => {
+              clearTimeout(timeout);
+              console.error(`[DELETE-BULK] Batch ${batchNum} fetch error (CORS/Network):`, {
+                message: e.message,
+                name: e.name,
+                url: deleteUrl,
+                isAbortError: e instanceof DOMException && e.name === 'AbortError'
+              });
+              throw e;
+            });
+            
+            clearTimeout(timeout);
+            
+            if(!resp.ok){
+              console.error(`[DELETE-BULK] Batch ${batchNum} failed with status ${resp.status}`);
+              failedBatches++;
+              resolve({batchNum, success:false, deleted:0, archived:0});
+              return;
+            }
+            
+            const data = await resp.json();
+            console.log(`[DELETE-BULK] Batch ${batchNum} result:`, {deleted:data.deleted, archived:data.archived});
+            
+            totalDeleted += (data.deleted || 0);
+            totalArchived += (data.archived || 0);
+            completedBatches++;
+            
+            // Update progress
+            const progress = Math.round((completedBatches / totalBatches) * 100);
+            if(isLargeOp){
+              updateProgressModal(`${completedBatches}/${totalBatches} batches completed (${totalDeleted} users deleted)`, progress);
+            }
+            
+            resolve({batchNum, success:true, deleted:data.deleted, archived:data.archived});
+          }catch(batchErr){
+            console.error(`[DELETE-BULK] Batch ${batchNum} error:`, batchErr.message);
+            failedBatches++;
+            completedBatches++;
+            const progress = Math.round((completedBatches / totalBatches) * 100);
+            if(isLargeOp){
+              updateProgressModal(`${completedBatches}/${totalBatches} batches processed (error in batch ${batchNum})`, progress);
+            }
+            resolve({batchNum, success:false, error:batchErr.message});
+          }
+        });
+      });
+      
+      await Promise.all(parallelPromises);
+      
+      // Small delay between batch groups to avoid overwhelming server
+      if(i + parallelBatches < totalBatches){
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
+    
+    if(isLargeOp) closeProgressModal();
+    
+    if(totalDeleted > 0 || totalArchived > 0){
+      const msg = `✅ Successfully deleted ${totalDeleted} user(s)${failedBatches>0?` ⚠️ ${failedBatches}/${totalBatches} batches had issues`:''}`;
+      toast(msg, 'success');
+      console.log(`[DELETE-BULK] Complete. Deleted: ${totalDeleted}, Archived: ${totalArchived}, Failed batches: ${failedBatches}`);
       window._umSelected.clear();
-      loadUserList();
+      setTimeout(() => { loadUserList(); umUpdateBulkBar(); }, 500);
     }else{
-      toast(data.error||'Delete failed','error');
+      toast('❌ Delete operation failed - no users were processed', 'error');
     }
   }catch(e){
+    console.error('[DELETE-BULK] Fatal error:', e);
+    if(isLargeOp) closeProgressModal();
     toast('Delete failed: '+e.message,'error');
+  }
+}
+
+// Progress modal for large operations
+function showProgressModal(title, progress){
+  const modal = document.createElement('div');
+  modal.id = 'umProgressModal';
+  modal.style.cssText = `
+    position:fixed;top:0;left:0;right:0;bottom:0;
+    background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;
+    z-index:9999;backdrop-filter:blur(4px)
+  `;
+  modal.innerHTML = `
+    <div style="background:var(--ink3);border:1px solid var(--border);border-radius:var(--radius);
+                padding:2rem;width:90%;max-width:400px;box-shadow:0 20px 60px rgba(0,0,0,0.3)">
+      <h3 style="margin:0 0 1rem;color:var(--text);font-size:1.1rem">${title}</h3>
+      <div style="background:var(--ink);border-radius:8px;height:24px;overflow:hidden;margin-bottom:1rem">
+        <div id="umProgressBar" style="background:linear-gradient(90deg,#1f6feb,#58a6ff);
+                                       height:100%;width:${progress}%;transition:width 0.3s ease;
+                                       display:flex;align-items:center;justify-content:center;
+                                       font-size:0.75rem;color:#fff;font-weight:600">
+          ${progress}%
+        </div>
+      </div>
+      <p id="umProgressText" style="margin:0;color:var(--text2);font-size:0.9rem;text-align:center">Processing...</p>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function updateProgressModal(text, progress){
+  const bar = document.getElementById('umProgressBar');
+  const txt = document.getElementById('umProgressText');
+  if(bar) bar.style.width = progress + '%';
+  if(bar) bar.textContent = progress + '%';
+  if(txt) txt.textContent = text;
+}
+
+function closeProgressModal(){
+  const modal = document.getElementById('umProgressModal');
+  if(modal) modal.remove();
+}
+
+async function umArchiveSelected(){
+  if(!window._umSelected||window._umSelected.size===0){ toast('No users selected','warning'); return; }
+  const idArray = Array.from(window._umSelected);
+  console.log('[ARCHIVE-BULK] Selected IDs:', idArray.length);
+  if(!confirm(`Archive ${idArray.length} user(s)? They won't be able to login until unarchived.`)) return;
+  
+  // Show progress modal for large operations
+  const isLargeOp = idArray.length > 100;
+  if(isLargeOp){
+    showProgressModal(`Archiving ${idArray.length} users in batches...`, 0);
+  }
+  
+  toast('⏳ Starting bulk archive...', 'info');
+  
+  try{
+    const batchSize = 150;
+    const parallelBatches = 3;
+    let totalArchived = 0;
+    let failedBatches = 0;
+    let completedBatches = 0;
+    const totalBatches = Math.ceil(idArray.length / batchSize);
+    
+    console.log(`[ARCHIVE-BULK] Processing ${idArray.length} users in ${totalBatches} batches`);
+    
+    for(let i = 0; i < totalBatches; i += parallelBatches){
+      const batchIndices = [];
+      for(let j = 0; j < parallelBatches && (i + j) < totalBatches; j++){
+        batchIndices.push(i + j);
+      }
+      
+      const parallelPromises = batchIndices.map(batchIdx => {
+        const startIdx = batchIdx * batchSize;
+        const endIdx = Math.min(startIdx + batchSize, idArray.length);
+        const batch = idArray.slice(startIdx, endIdx);
+        const batchNum = batchIdx + 1;
+        
+        return new Promise(async (resolve) => {
+          try{
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 60000);
+            
+            const resp = await fetch(`${window.AMS_CONFIG.API_URL}/api/users/archive-bulk`, {
+              method:'POST',
+              headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({user_ids:batch}),
+              signal: controller.signal
+            }).catch(e => {
+              clearTimeout(timeout);
+              throw e;
+            });
+            
+            clearTimeout(timeout);
+            
+            if(!resp.ok){
+              failedBatches++;
+              resolve({success:false});
+              return;
+            }
+            
+            const data = await resp.json();
+            totalArchived += (data.archived || 0);
+            completedBatches++;
+            
+            const progress = Math.round((completedBatches / totalBatches) * 100);
+            if(isLargeOp){
+              updateProgressModal(`${completedBatches}/${totalBatches} batches completed (${totalArchived} users archived)`, progress);
+            }
+            
+            resolve({success:true, archived:data.archived});
+          }catch(batchErr){
+            console.error(`[ARCHIVE-BULK] Batch error:`, batchErr);
+            failedBatches++;
+            completedBatches++;
+            const progress = Math.round((completedBatches / totalBatches) * 100);
+            if(isLargeOp){
+              updateProgressModal(`${completedBatches}/${totalBatches} batches processed`, progress);
+            }
+            resolve({success:false});
+          }
+        });
+      });
+      
+      await Promise.all(parallelPromises);
+      
+      if(i + parallelBatches < totalBatches){
+        await new Promise(r => setTimeout(r, 500));
+      }
+    }
+    
+    if(isLargeOp) closeProgressModal();
+    
+    if(totalArchived > 0){
+      toast(`✅ Archived ${totalArchived} user(s)${failedBatches>0?` ⚠️ ${failedBatches} batches had issues`:''}`, 'success');
+      window._umSelected.clear();
+      setTimeout(() => { loadUserList(); loadArchiveUsers(); umUpdateBulkBar(); }, 500);
+    }else{
+      toast('Archive failed', 'error');
+    }
+  }catch(e){
+    console.error('[ARCHIVE-BULK] Error:', e);
+    if(isLargeOp) closeProgressModal();
+    toast('Archive failed: '+e.message,'error');
   }
 }
 
@@ -8585,7 +9275,7 @@ function previewBulkCSV(){
   if(!file) return;
   const reader = new FileReader();
   reader.onload = e => {
-    const lines = e.target.result.split('\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'));
+    const lines = e.target.result.split(' ').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'));
     const header = _parseCSVLine(lines[0]).map(h=>h.toLowerCase());
     _bulkRows = lines.slice(1).map(line=>{
       const vals = _parseCSVLine(line);
@@ -8634,7 +9324,7 @@ function downloadCSVTemplate(){
     'faculty,Dr. Meena Iyer,PUC26AIM001,meena@ams.edu,,AIM,AIM,,,PUC26AIM001,Assistant Professor,Machine Learning|Deep Learning,',
     'faculty,Prof. Raj Verma,PUC26ECE001,raj@ams.edu,,ECE,ECE,,,PUC26ECE001,HoD,VLSI Design|Signals,',
   ];
-  const blob=new Blob([rows.join('\n')],{type:'text/csv'});
+  const blob=new Blob([rows.join(' ')],{type:'text/csv'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ams_bulk_template.csv';a.click();
 }
 
@@ -8927,6 +9617,38 @@ function umRoleFilterChanged(){
   loadUserList();
 }
 
+// Quietly reload user list in background after deletion (no error display)
+async function reloadUserListQuietly(){
+  try{
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    let url = `${window.AMS_CONFIG.API_URL}/api/users/list`;
+    const role  = document.getElementById('umFilterRole')?.value||'';
+    const dept  = document.getElementById('umFilterDept')?.value||'';
+    const sem   = document.getElementById('umFilterSem')?.value||'';
+    const params = [];
+    if(role) params.push(`role=${encodeURIComponent(role)}`);
+    if(dept) params.push(`department=${encodeURIComponent(dept)}`);
+    if(sem)  params.push(`semester=${encodeURIComponent(sem)}`);
+    if(params.length) url += '?' + params.join('&');
+    const resp = await fetch(url, { signal: controller.signal }).catch(()=>null);
+    clearTimeout(timeout);
+    if(resp?.ok){
+      const data = await resp.json();
+      const users = data.users||[];
+      const tbody = document.getElementById('userTableBody');
+      if(tbody && users.length){
+        window._umUserMap = {};
+        users.forEach(u=>{ window._umUserMap[u.id]=u; });
+        tbody.innerHTML=users.map(u=>{
+          const suspended = u.is_active===false;
+          const idLabel = u.role==='student'?(u.roll_no||u.username||'—'):u.role==='faculty'?(u.employee_id||u.username||'—'):(u.username||'admin');
+          const line2 = u.role==='faculty'?[u.program, u.designation].filter(Boolean).join(' · '):[u.program, u.section].filter(Boolean).join(' · ');
+          const infoCell = `<span style="font-size:.82rem;font-weight:600">${u.department||'—'}</span>${line2?`<br><span style="font-size:.72rem;color:var(--text3)">${line2}</span>`:''}${u.role==='faculty'&&u.subjects?`<br><span style="font-size:.7rem;color:var(--text2);" title="${(u.subjects).replace(/\"/g,'&quot;')}">${u.subjects.length>30?u.subjects.slice(0,30)+'…':u.subjects}</span>`:''}` ;
+          const statusLabel = suspended?'<span style="color:#ef4444;font-size:.75rem">🚫 SUSPENDED</span>':'<span style="color:#16a34a;font-size:.75rem">✓ Active</span>';
+          return `<tr class="um-row" data-id="${u.id}" style="${suspended?'opacity:0.6;':''}"><td><input type="checkbox" class="um-row-chk" data-id="${u.id}" onchange="umUpdateBulkBar()"/></td><td><strong>${idLabel}</strong>${u.full_name?`<br><span style="color:var(--text3);font-size:.75rem">${u.full_name}</span>`:''}${u.email?`<br><span style="color:var(--text3);font-size:.72rem">${u.email}</span>`:''}</td><td>${infoCell}</td><td>${u.role==='faculty'?'👨‍🏫Fac':u.role==='student'?'👤Std':'🔐Admin'}</td><td>${statusLabel}</td><td><button class="btn btn-ghost btn-sm" title="Edit" onclick="openEditUser(${JSON.stringify(u).replace(/\"/g,'&quot;')})\">✏️</button> <button class="btn btn-ghost btn-sm" title="${suspended?'Activate':'Suspend'}" onclick="${suspended?'activateUser':'suspendUser'}('${u.id}')\">💤</button> <button class="btn btn-danger btn-sm" title="Delete" onclick="if(confirm('Permanently delete this user?'))deleteUser('${u.id}')\">🗑️</button></td></tr>`;
+        }).join('');       }     }   }catch(e){     console.log('[reloadUserListQuietly] Background reload skipped:', e.message);   } }
+
 async function loadUserList(){
   try{
     console.log('[loadUserList] Starting user list fetch...');
@@ -8943,12 +9665,38 @@ async function loadUserList(){
     console.log('[loadUserList] Fetch URL:', url);
     const controller = new AbortController();
     const timeout = setTimeout(() => {
-      console.warn('[loadUserList] Timeout after 10 seconds - backend may be initializing or overloaded');
+      console.warn('[loadUserList] Timeout after 30 seconds - backend may be initializing or overloaded');
       controller.abort();
-    }, 10000); // 10 second timeout
+    }, 30000); // 30 second timeout for cold Cloud Run startup
+
+    // Get Firebase auth token for secure API call
+    const headers = {};
+    console.log('[loadUserList] Checking Firebase auth:', {
+      hasFirebaseAuth: !!window.firebaseAuth,
+      hasCurrentUser: !!(window.firebaseAuth?.currentUser),
+      userEmail: window.firebaseAuth?.currentUser?.email || 'none'
+    });
+    
+    try{
+      const token = await window.getFirebaseToken();
+      console.log('[loadUserList] Token retrieval result:', {
+        tokenExists: !!token,
+        tokenLength: token?.length || 0
+      });
+      
+      if(token){
+        headers['Authorization'] = `Bearer ${token}`;
+        console.log('[loadUserList] Using authenticated request');
+      }else{
+        console.warn('[loadUserList] No Firebase token available - user may not be logged in');
+      }
+    }catch(e){
+      console.warn('[loadUserList] Failed to get Firebase token:', {message: e.message, error: e});
+    }
 
     const resp = await fetch(url, {
-      signal: controller.signal
+      signal: controller.signal,
+      headers: headers
     }).catch((err)=>{
       console.warn('[loadUserList] Fetch failed:', err.message);
       return null;
@@ -8976,9 +9724,14 @@ async function loadUserList(){
       tbody.innerHTML='<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text3)">🚫 No users found</td></tr>';
       return;
     }
-    // Store user objects globally for edit lookup
-    window._umUserMap = {};
-    users.forEach(u=>{ window._umUserMap[u.id]=u; });
+    
+    // Store users globally for pagination
+    window._umAllUsers = users;
+    window._umCurrentPage = 0;
+    window._umPageSize = 100;
+    
+    // Render first page
+    _umRenderPage(0);
     tbody.innerHTML=users.map(u=>{
       const suspended = u.is_active===false;
       const idLabel = u.role==='student'
@@ -9099,11 +9852,11 @@ async function loadDeptPanel(){
 }
 
 function _deptToTextarea(dept){
-  return (dept.programs||[]).map(p=>`${p.name}|${p.code}|${(p.batches||[]).join(',')}|${p.semesters||8}`).join('\n');
+  return (dept.programs||[]).map(p=>`${p.name}|${p.code}|${(p.batches||[]).join(',')}|${p.semesters||8}`).join(' ');
 }
 
 function _parseProgramsText(text){
-  return text.split('\n').map(l=>l.trim()).filter(Boolean).map(line=>{
+  return text.split(' ').map(l=>l.trim()).filter(Boolean).map(line=>{
     const [name='',code='',batchStr='',semesters='8'] = line.split('|');
     const batches = batchStr.split(',').map(b=>b.trim()).filter(Boolean);
     return {name:name.trim(), code:code.trim().toUpperCase(), batches, semesters:parseInt(semesters)||8};
@@ -9208,12 +9961,12 @@ function renderFaceRegistration(){
         </div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label>Full Name</label><input id="regName" placeholder="Student full name"/></div>
-        <div class="form-group"><label>Roll Number <span class="text-muted" style="font-weight:400">(auto-generated, editable)</span></label><input id="regRoll" placeholder="Auto-generated on dept select"/></div>
+        <div class="form-group"><label for="regName">Full Name</label><input id="regName" placeholder="Student full name"/></div>
+        <div class="form-group"><label for="regRoll">Roll Number <span class="text-muted" style="font-weight:400">(auto-generated, editable)</span></label><input id="regRoll" placeholder="Auto-generated on dept select"/></div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label>Section</label><input id="regSec" placeholder="e.g. A"/></div>
-        <div class="form-group"><label>Academic Year</label><input id="regYear" value="${acYear}"/></div>
+        <div class="form-group"><label for="regSec">Section</label><input id="regSec" placeholder="e.g. A"/></div>
+        <div class="form-group"><label for="regYear">Academic Year</label><input id="regYear" value="${acYear}"/></div>
       </div>
       <div id="regCamSection">
         <button class="btn btn-teal" onclick="startRegCamera()">📷 Capture Live Photo</button>
@@ -9501,15 +10254,70 @@ function renderSystemConfig(){
   const end = (AMS.systemConfig && AMS.systemConfig.attendance_window_end) ? AMS.systemConfig.attendance_window_end : '18:00';
 
   return `<div class="card">
-    <div class="card-header"><div class="card-title">⚙️ System Configuration</div></div>
-    <div class="form-group"><label>Face Recognition Tolerance</label><input id="cfg_tolerance" type="number" step="0.01" value="${tol}"/><small class="text-dim">0.4=strict, 0.6=lenient</small></div>
-    <div class="form-group"><label>College Latitude</label><input id="cfg_college_lat" type="number" step="0.000001" value="${lat}"/><small class="text-dim">GPS latitude of campus center</small></div>
-    <div class="form-group"><label>College Longitude</label><input id="cfg_college_lng" type="number" step="0.000001" value="${lng}"/><small class="text-dim">GPS longitude of campus center</small></div>
-    <div class="form-group"><label>Campus Radius (km)</label><input id="cfg_college_rad" type="number" step="0.01" value="${rad}"/><small class="text-dim">Geofence radius in kilometres</small></div>
-    <div class="form-group"><label>QR Expiry (minutes)</label><input id="cfg_qr_expiry" type="number" value="${qr}"/><small class="text-dim">How long QR codes are valid</small></div>
-    <div class="form-group"><label>Attendance Window End</label><input id="cfg_att_end" type="time" value="${end}"/><small class="text-dim">Students cannot mark after this time</small></div>
-    <div class="d-flex gap-md"><button class="btn btn-primary" onclick="saveSystemConfig()">Save Settings</button><button class="btn btn-outline" onclick="loadSystemConfig()">Reload</button></div>
+    <div class="card-header"><div class="card-title">⚙️ System Configuration</div><span class="badge badge-blue">Dynamic Settings</span></div>
+    <p class="text-dim" style="margin-bottom:1.25rem;font-size:0.9rem">⚡ <strong>All settings below are applied dynamically in real-time to all users.</strong> When you save changes, they take effect immediately across the entire system.</p>
+    
+    <div style="background:var(--ink3);border-radius:var(--radius-sm);padding:1rem;margin-bottom:1.25rem;border-left:3px solid var(--blue)">
+      <h4 style="font-size:0.95rem;font-weight:600;margin-bottom:0.5rem">📍 Geofence Settings (Location-Based Attendance)</h4>
+      <p style="font-size:0.85rem;color:var(--text2);margin-bottom:0.5rem">Define the physical campus boundaries. Only students and faculty within this geofence can mark attendance.</p>
+      <p style="font-size:0.85rem;color:var(--text3)"><strong>Current Geofence:</strong> Center at ${lat.toFixed(5)}, ${lng.toFixed(5)} • Radius: ${rad} km ≈ ${(rad*1000).toFixed(0)} meters</p>
+    </div>
+    
+    <div class="form-group">
+      <label>📋 Face Recognition Tolerance</label>
+      <input id="cfg_tolerance" type="number" step="0.01" value="${tol}" oninput="updateConfigPreview()"/>
+      <small class="text-dim">How lenient face matching is: 0.4=strict (difficult match) • 0.5=balanced • 0.6=lenient (easy match)</small>
+      <p style="font-size:0.8rem;color:var(--green2);margin-top:0.25rem">✓ Applied to: Face authentication, face attendance, face-based access control</p>
+    </div>
+    
+    <div class="form-group">
+      <label>🗺️ College Latitude</label>
+      <input id="cfg_college_lat" type="number" step="0.000001" value="${lat}" oninput="updateConfigPreview()"/>
+      <small class="text-dim">GPS latitude coordinate (North-South position) of your campus center</small>
+    </div>
+    
+    <div class="form-group">
+      <label>🗺️ College Longitude</label>
+      <input id="cfg_college_lng" type="number" step="0.000001" value="${lng}" oninput="updateConfigPreview()"/>
+      <small class="text-dim">GPS longitude coordinate (East-West position) of your campus center</small>
+    </div>
+    
+    <div class="form-group">
+      <label>📏 Campus Radius (km)</label>
+      <input id="cfg_college_rad" type="number" step="0.01" value="${rad}" oninput="updateConfigPreview()"/>
+      <small class="text-dim">Radius of geofence in kilometers ~ <strong id="cfg_radius_meters">${(rad*1000).toFixed(0)} meters</strong></small>
+      <p style="font-size:0.8rem;color:var(--green2);margin-top:0.25rem">✓ Applied to: QR attendance, Face Recognition, Location-based access</p>
+    </div>
+    
+    <div class="form-group">
+      <label>⏱️ QR Code Expiry</label>
+      <input id="cfg_qr_expiry" type="number" value="${qr}" oninput="updateConfigPreview()"/>
+      <small class="text-dim">How many minutes a generated QR code remains valid for attendance</small>
+      <p style="font-size:0.8rem;color:var(--green2);margin-top:0.25rem">✓ Applied to: QR attendance marking, QR-based sessions</p>
+    </div>
+    
+    <div class="form-group">
+      <label>🕐 Attendance Window End Time</label>
+      <input id="cfg_att_end" type="time" value="${end}"/>
+      <small class="text-dim">After this time, students cannot mark attendance (will be marked ABSENT)</small>
+      <p style="font-size:0.8rem;color:var(--green2);margin-top:0.25rem">✓ Applied to: Face Recognition, QR attendance, Manual attendance marking</p>
+    </div>
+    
+    <div style="background:var(--ink3);border-radius:var(--radius-sm);padding:1rem;margin-bottom:1.25rem;border-left:3px solid var(--orange)">
+      <p style="font-size:0.85rem;color:var(--orange)"><strong>⚠️ Impact Warning:</strong> Changing these settings will affect active attendance sessions. Students already in the process of marking attendance will see updated geofence settings on their next action.</p>
+    </div>
+    
+    <div class="d-flex gap-md"><button class="btn btn-primary" onclick="saveSystemConfig()">💾 Save & Apply to All Users</button><button class="btn btn-outline" onclick="loadSystemConfig()">🔄 Reload Current Settings</button></div>
   </div>`;
+}
+
+// Update configuration preview when values change
+function updateConfigPreview(){
+  const radVal = parseFloat(document.getElementById('cfg_college_rad')?.value || '0.2');
+  const radiusMetersEl = document.getElementById('cfg_radius_meters');
+  if(radiusMetersEl){
+    radiusMetersEl.textContent = (radVal*1000).toFixed(0) + ' meters';
+  }
 }
 
 // Fetch system configuration from backend and update AMS.global state
@@ -9541,18 +10349,51 @@ async function loadSystemConfig(){
 // Save system config to backend and apply locally
 async function saveSystemConfig(){
   try{
+    // Validate settings
+    const latVal = parseFloat(document.getElementById('cfg_college_lat').value);
+    const lngVal = parseFloat(document.getElementById('cfg_college_lng').value);
+    const radVal = parseFloat(document.getElementById('cfg_college_rad').value);
+    const endTimeVal = document.getElementById('cfg_att_end').value;
+    
+    if(isNaN(latVal) || isNaN(lngVal) || isNaN(radVal)){
+      toast('❌ Invalid location coordinates','error');
+      return;
+    }
+    if(radVal <= 0){
+      toast('❌ Campus radius must be greater than 0','error');
+      return;
+    }
+    if(!endTimeVal){
+      toast('❌ Please set attendance window end time','error');
+      return;
+    }
+
     const payload = {
-      college_lat: parseFloat(document.getElementById('cfg_college_lat').value),
-      college_lng: parseFloat(document.getElementById('cfg_college_lng').value),
-      college_radius_km: parseFloat(document.getElementById('cfg_college_rad').value),
+      college_lat: latVal,
+      college_lng: lngVal,
+      college_radius_km: radVal,
       tolerance: document.getElementById('cfg_tolerance').value,
       qr_expiry_minutes: parseInt(document.getElementById('cfg_qr_expiry').value||'5',10),
-      attendance_window_end: document.getElementById('cfg_att_end').value
+      attendance_window_end: endTimeVal
     };
-    const resp = await fetch(`${window.AMS_CONFIG.API_URL}/api/system-config`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    
+    // Save to backend
+    const resp = await fetch(`${window.AMS_CONFIG.API_URL}/api/system-config`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
+    });
     const data = await resp.json().catch(()=>({}));
-    if(!resp.ok){toast(data.error||'Failed saving config','error'); return}
-    // update local state
+    if(!resp.ok){
+      toast(data.error||'Failed saving config','error');
+      return;
+    }
+    
+    // Update local state
+    const oldLat = AMS.college.lat;
+    const oldLng = AMS.college.lng;
+    const oldRad = AMS.college.radiusKm;
+    
     AMS.college.lat = payload.college_lat;
     AMS.college.lng = payload.college_lng;
     AMS.college.radiusKm = payload.college_radius_km;
@@ -9560,8 +10401,67 @@ async function saveSystemConfig(){
     AMS.systemConfig.tolerance = payload.tolerance;
     AMS.systemConfig.qr_expiry_minutes = payload.qr_expiry_minutes;
     AMS.systemConfig.attendance_window_end = payload.attendance_window_end;
-    toast('Configuration saved!','success');
-  }catch(e){console.error('saveSystemConfig',e);toast('Save failed','error')}
+    
+    // Check if location settings changed and notify active modules
+    const locationChanged = (oldLat !== payload.college_lat || oldLng !== payload.college_lng || oldRad !== payload.college_radius_km);
+    if(locationChanged){
+      console.log('[CONFIG] Location settings changed - updating dependent modules');
+      broadcastSettingsChange({location:true, attendance:true});
+    }else{
+      broadcastSettingsChange({tolerance:true, qr_expiry:true, attendance_window:true});
+    }
+    
+    toast('✅ Configuration saved and applied to all modules!','success');
+  }catch(e){
+    console.error('saveSystemConfig',e);
+    toast('Save failed','error');
+  }
+}
+
+// Broadcast settings changes to all modules that depend on them
+function broadcastSettingsChange(changes){
+  if(!changes) return;
+  
+  // Store in AMS so modules can check when they initialize
+  AMS.configLastUpdated = new Date().getTime();
+  AMS.configChanges = changes;
+  console.log('[CONFIG] Broadcasting settings change:', changes);
+  
+  // If location changed, reload attendance modules so they use new geofence
+  if(changes.location){
+    const currentModule = document.querySelector('[data-current-module]')?.getAttribute('data-current-module');
+    if(currentModule && ['s-qr-scanner','f-qr-generator','a-qr-dashboard'].includes(currentModule)){
+      // Schedule module reload in next tick to avoid blocking UI
+      setTimeout(()=>{
+        renderModule(currentModule);
+        toast('📍 Location geofence updated - module reloaded','info');
+      },500);
+    }
+  }
+  
+  // Notify all open windows/tabs about config change via localStorage
+  try{
+    localStorage.setItem('AMS_CONFIG_CHANGED',JSON.stringify({
+      timestamp:new Date().getTime(),
+      changes:changes
+    }));
+  }catch(e){console.warn('[CONFIG] localStorage unavailable',e);}
+}
+
+// Listen for config changes from other tabs/windows
+if(typeof window!=='undefined'){
+  window.addEventListener('storage',(e)=>{
+    if(e.key==='AMS_CONFIG_CHANGED'){
+      try{
+        const data = JSON.parse(e.newValue||'{}');
+        console.log('[CONFIG] Settings changed in another tab/window');
+        // Reload system config from backend
+        loadSystemConfig().then(()=>{
+          toast('⚙️ System configuration updated from another session','info');
+        }).catch(()=>{});
+      }catch(err){console.warn('[CONFIG] storage event parse error',err);}
+    }
+  });
 }
 
 function renderAuditLogs(){
@@ -10201,14 +11101,16 @@ let sessionMonitorInterval = null;
 
 async function initSessionMonitor() {
   // Start periodic session validation every 5 minutes
-  // Check immediately
-  await validateCurrentSession();
-  
-  // Then check every 5 minutes
+  // NOTE: Don't validate on startup—let users authenticate first
+  // Check every 5 minutes after initial login
   sessionMonitorInterval = setInterval(async () => {
     const username = AmsDB._getCookie();
     if (username) {
-      await validateCurrentSession();
+      const isValid = await validateCurrentSession();
+      if (!isValid) {
+        console.info('[SessionMonitor] Session became invalid, logging out');
+        await logout();
+      }
     }
   }, 5 * 60 * 1000); // 5 minutes
 }
@@ -10227,7 +11129,9 @@ async function validateCurrentSession() {
     
     if (!resp.ok) {
       console.warn('[SessionMonitor] Session invalid, logging out');
-      await logout(); // Force logout if session invalid
+      // Don't show error toast - just silently logout and clear stale data
+      localStorage.removeItem('ams_session_json');
+      AmsDB.remove('ams_session').catch(()=>{});
       return false;
     }
     
@@ -10249,10 +11153,15 @@ function stopSessionMonitor() {
 
 
 window.addEventListener('DOMContentLoaded',()=>{
+  // Clear safety timeout (app initialized successfully)
+  if(window._safetyTimeout) clearTimeout(window._safetyTimeout);
+  console.log('[Init] DOMContentLoaded - app initializing');
+  
   // INSTANT: Show login immediately, bypass all async operations
   const pageLoader=document.getElementById('pageLoader');
   const loginPage=document.getElementById('loginPage');
   
+  console.log('[Init] Hiding pageLoader, showing loginPage');
   if(pageLoader) pageLoader.style.display='none';
   if(loginPage) loginPage.style.display='flex';
   
@@ -10297,10 +11206,18 @@ window.addEventListener('DOMContentLoaded',()=>{
           AMS.profile = session.profile || {};
           if (!AMS.profile.username) AMS.profile.username = AMS.user.username || '';
           if (!AMS.profile.employee_id && AMS.role === 'faculty') AMS.profile.employee_id = AMS.user.id || '';
-          initDashboard();
+          // Try to load dashboard but suppress any session validation errors
+          try {
+            initDashboard();
+          } catch (dashErr) {
+            console.warn('[Init] Dashboard init failed, clearing stale session:', dashErr.message);
+            localStorage.removeItem('ams_session_json');
+          }
         }
       } catch (e) {
         console.warn('[Init] Error loading session:', e.message);
+        // Clear invalid session data
+        localStorage.removeItem('ams_session_json');
       }
     }
   }, 100); // Small delay to avoid blocking page render
@@ -10328,16 +11245,16 @@ function showQRAttendanceForm(sessionId,course){
   }
   document.getElementById('qrAttContent').innerHTML=`
     <div class="form-group">
-      <label>Roll Number / Student ID</label>
+      <label for="qrRollNo">Roll Number / Student ID</label>
       <input id="qrRollNo" type="text" placeholder="e.g., CS001" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid var(--border);background:var(--ink3);color:var(--text);font-size:1rem"/>
     </div>
     <div class="form-group">
-      <label>Full Name</label>
+      <label for="qrName">Full Name</label>
       <input id="qrName" type="text" placeholder="Enter your full name" style="width:100%;padding:.7rem;border-radius:8px;border:1px solid var(--border);background:var(--ink3);color:var(--text);font-size:1rem"/>
     </div>
     <div class="form-group">
-      <label>Course</label>
-      <input type="text" value="${course}" disabled style="width:100%;padding:.7rem;border-radius:8px;border:1px solid var(--border);background:var(--ink3);color:var(--text2);opacity:0.6;font-size:1rem"/>
+      <label for="qrCourse">Course</label>
+      <input id="qrCourse" type="text" value="${course}" disabled style="width:100%;padding:.7rem;border-radius:8px;border:1px solid var(--border);background:var(--ink3);color:var(--text2);opacity:0.6;font-size:1rem"/>
     </div>
     <button class="btn btn-primary" onclick="captureQRFaceAndLocation('${sessionId}','${course}')" style="width:100%;padding:.8rem;margin-top:1rem">📷 Capture Face & Location</button>
     <button class="btn btn-outline" onclick="cancelQRAttendance()" style="width:100%;padding:.8rem;margin-top:.5rem">Cancel</button>
@@ -10470,7 +11387,7 @@ function loadBulkEnrollmentForm(){
   
   // Update student count as user types
   document.getElementById('bulkStudentList').addEventListener('input', (e) => {
-    const lines = e.target.value.trim().split('\n').filter(l => l.trim());
+    const lines = e.target.value.trim().split(' ').filter(l => l.trim());
     document.getElementById('bulkCount').textContent = lines.length;
   });
 }
@@ -10490,7 +11407,7 @@ async function executeBulkEnrollment(){
   }
   
   // Parse CSV
-  const lines = csv.trim().split('\n').filter(l => l.trim());
+  const lines = csv.trim().split(' ').filter(l => l.trim());
   const students = lines.map(line => {
     const [student_id, roll_no, section_name] = line.split(',').map(s => s.trim());
     return { student_id, roll_no, section_name: section_name || 'A' };
@@ -10554,9 +11471,9 @@ async function checkSectionCounts(){
     
     if(result.success) {
       console.log('Section Counts:', result.section_counts);
-      alert(`Section Counts:\n${Object.entries(result.section_counts || {})
+      alert(`Section Counts: ${Object.entries(result.section_counts || {})
         .map(([sec, cnt]) => `${sec}: ${cnt}/60 students`)
-        .join('\n')}`);
+        .join(' ')}`);
     }
   } catch(e) {
     console.error('Error checking counts:', e);
@@ -10585,7 +11502,7 @@ async function loadFacultySubjectStudents(subjectCode){
     const result = await response.json();
     
     if(result.success) {
-      renderFacultySubjectStudents(result);
+      displayFacultySubjectStudentsData(result);
     } else {
       container.innerHTML = `<div style="padding:2rem;color:var(--text2)">
         ❌ ${result.error || 'Failed to load students'}
@@ -10601,7 +11518,7 @@ async function loadFacultySubjectStudents(subjectCode){
 /**
  * Render faculty's subject students with section-wise grouping
  */
-function renderFacultySubjectStudents(data){
+function displayFacultySubjectStudentsData(data){
   const container = document.getElementById('facultyStudentsContainer') || document.getElementById('faculty-main');
   
   let html = `
@@ -10670,13 +11587,13 @@ function renderFacultySubjectStudents(data){
  * Export subject students to CSV (for attendance/grading)
  */
 function exportSubjectStudentsCSV(subjectCode, summary){
-  let csv = `Subject,Section,Batch,Roll Number\n`;
+  let csv = `Subject,Section,Batch,Roll Number `;
   
   // Flatten the structure and create CSV
   Object.entries(summary || {}).forEach(([section, info]) => {
     Object.entries(info.batches || {}).forEach(([batch, count]) => {
       for(let i = 0; i < count; i++) {
-        csv += `${subjectCode},${section},${batch},<roll_number>\n`;
+        csv += `${subjectCode},${section},${batch},<roll_number> `;
       }
     });
   });
@@ -10685,4 +11602,207 @@ function exportSubjectStudentsCSV(subjectCode, summary){
   link.href = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csv);
   link.download = `${subjectCode}_students.csv`;
   link.click();
+}
+
+// ════════════════════════════════════════════════════════════════
+// ARCHIVE MANAGEMENT FUNCTIONS
+// ════════════════════════════════════════════════════════════════
+
+async function loadArchiveUsers(){
+  const container = document.getElementById('archiveUsersContainer');
+  container.innerHTML = '<p style="color:var(--text3);text-align:center;padding:2rem">Loading archived users…</p>';
+  
+  try {
+    const url = `${window.AMS_CONFIG.API_URL}/api/archive/users?limit=100&offset=0`;
+    const resp = await fetch(url, { method:'GET', headers:{'Content-Type':'application/json'} });
+    
+    if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    
+    if(!data.success) throw new Error(data.error || 'Failed to load archive');
+    
+    const users = data.archived_users || [];
+    if(users.length === 0){
+      container.innerHTML = '<p style="color:var(--text3);text-align:center;padding:2rem">📭 No archived users</p>';
+      return;
+    }
+    
+    let html = `<table style="width:100%;border-collapse:collapse">
+      <thead><tr style="background:var(--ink3);border-bottom:2px solid var(--border)">
+        <th style="padding:.75rem;text-align:left">Username</th>
+        <th style="padding:.75rem;text-align:left">Name</th>
+        <th style="padding:.75rem;text-align:left">Role</th>
+        <th style="padding:.75rem;text-align:left">Department</th>
+        <th style="padding:.75rem;text-align:left">Deleted</th>
+        <th style="padding:.75rem;text-align:center">Actions</th>
+      </tr></thead><tbody>`;
+    
+    users.forEach(user => {
+      const deletedAt = new Date(user.deleted_at).toLocaleDateString();
+      html += `<tr style="border-bottom:1px solid var(--border);hover:background:var(--ink3)">
+        <td style="padding:.75rem">${user.username || '-'}</td>
+        <td style="padding:.75rem">${user.full_name || '-'}</td>
+        <td style="padding:.75rem"><span style="background:${user.role==='admin'?'#ef4444':user.role==='faculty'?'#3b82f6':'#10b981'};color:white;padding:.25rem .5rem;border-radius:.25rem;font-size:.8rem">${user.role}</span></td>
+        <td style="padding:.75rem">${user.department || '-'}</td>
+        <td style="padding:.75rem;color:var(--text2);font-size:.85rem">${deletedAt}</td>
+        <td style="padding:.75rem;text-align:center">
+          <button class="btn btn-sm" style="background:#10b981;color:white;border:none;margin:.25rem" onclick="restoreArchivedUser('${user.id}','${user.username}')">↩️ Restore</button>
+          <button class="btn btn-sm" style="background:#ef4444;color:white;border:none;margin:.25rem" onclick="purgeArchivedUser('${user.id}','${user.username}')">🗑️ Delete</button>
+        </td>
+      </tr>`;
+    });
+    
+    html += `</tbody></table>`;
+    container.innerHTML = html;
+    
+  }catch(e){
+    console.error('[archiveUsers]', e);
+    container.innerHTML = `<div style="color:#ef4444;padding:1rem;background:#fef2f2;border-radius:var(--radius-sm)">Error: ${e.message}</div>`;
+  }
+}
+
+async function restoreArchivedUser(archiveId, username){
+  if(!confirm(`Restore user "${username}"? This will create a new active user account.`)) return;
+  
+  try {
+    const resp = await fetch(`${window.AMS_CONFIG.API_URL}/api/archive/users/restore`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ archive_id: archiveId })
+    });
+    
+    const data = await resp.json();
+    if(!data.success) throw new Error(data.error || 'Restore failed');
+    
+    showNotification(`✅ User "${username}" restored successfully!`, 'success');
+    loadArchiveUsers();
+    
+  }catch(e){
+    console.error('[restoreArchivedUser]', e);
+    showNotification(`❌ Restore failed: ${e.message}`, 'error');
+  }
+}
+
+async function purgeArchivedUser(archiveId, username){
+  if(!confirm(`⚠️ Permanently delete "${username}" from archive? This cannot be undone!`)) return;
+  
+  try {
+    const resp = await fetch(`${window.AMS_CONFIG.API_URL}/api/archive/users/purge`, {
+      method:'DELETE',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ archive_id: archiveId })
+    });
+    
+    const data = await resp.json();
+    if(!data.success) throw new Error(data.error || 'Purge failed');
+    
+    showNotification(`✅ User "${username}" permanently deleted from archive`, 'success');
+    loadArchiveUsers();
+    
+  }catch(e){
+    console.error('[purgeArchivedUser]', e);
+    showNotification(`❌ Purge failed: ${e.message}`, 'error');
+  }
+}
+
+async function loadArchiveTimetable(){
+  const container = document.getElementById('archiveTimetableContainer');
+  container.innerHTML = '<p style="color:var(--text3);text-align:center;padding:2rem">Loading archived timetable…</p>';
+  
+  try {
+    const url = `${window.AMS_CONFIG.API_URL}/api/archive/timetable?limit=100&offset=0`;
+    const resp = await fetch(url, { method:'GET', headers:{'Content-Type':'application/json'} });
+    
+    if(!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    
+    if(!data.success) throw new Error(data.error || 'Failed to load archive');
+    
+    const entries = data.archived_timetable || [];
+    if(entries.length === 0){
+      container.innerHTML = '<p style="color:var(--text3);text-align:center;padding:2rem">📭 No archived timetable entries</p>';
+      return;
+    }
+    
+    let html = `<table style="width:100%;border-collapse:collapse">
+      <thead><tr style="background:var(--ink3);border-bottom:2px solid var(--border)">
+        <th style="padding:.75rem;text-align:left">Faculty</th>
+        <th style="padding:.75rem;text-align:left">Subject</th>
+        <th style="padding:.75rem;text-align:left">Batch</th>
+        <th style="padding:.75rem;text-align:left">Day</th>
+        <th style="padding:.75rem;text-align:left">Time</th>
+        <th style="padding:.75rem;text-align:left">Room</th>
+        <th style="padding:.75rem;text-align:left">Deleted</th>
+        <th style="padding:.75rem;text-align:center">Actions</th>
+      </tr></thead><tbody>`;
+    
+    entries.forEach(entry => {
+      const deletedAt = new Date(entry.deleted_at).toLocaleDateString();
+      const time = entry.start_time + ' - ' + entry.end_time;
+      html += `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:.75rem">${entry.faculty_name || '-'}</td>
+        <td style="padding:.75rem">${entry.subject || '-'}</td>
+        <td style="padding:.75rem">${entry.batch || '-'}</td>
+        <td style="padding:.75rem">${entry.day_of_week || '-'}</td>
+        <td style="padding:.75rem;font-size:.85rem">${time || '-'}</td>
+        <td style="padding:.75rem">${entry.room_number || '-'}</td>
+        <td style="padding:.75rem;color:var(--text2);font-size:.85rem">${deletedAt}</td>
+        <td style="padding:.75rem;text-align:center">
+          <button class="btn btn-sm" style="background:#10b981;color:white;border:none;margin:.25rem" onclick="restoreArchivedTimetable('${entry.id}','${entry.subject}')">↩️ Restore</button>
+          <button class="btn btn-sm" style="background:#ef4444;color:white;border:none;margin:.25rem" onclick="purgeArchivedTimetable('${entry.id}','${entry.subject}')">🗑️ Delete</button>
+        </td>
+      </tr>`;
+    });
+    
+    html += `</tbody></table>`;
+    container.innerHTML = html;
+    
+  }catch(e){
+    console.error('[loadArchiveTimetable]', e);
+    container.innerHTML = `<div style="color:#ef4444;padding:1rem;background:#fef2f2;border-radius:var(--radius-sm)">Error: ${e.message}</div>`;
+  }
+}
+
+async function restoreArchivedTimetable(archiveId, subject){
+  if(!confirm(`Restore timetable entry for "${subject}"?`)) return;
+  
+  try {
+    const resp = await fetch(`${window.AMS_CONFIG.API_URL}/api/archive/timetable/restore`, {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ archive_id: archiveId })
+    });
+    
+    const data = await resp.json();
+    if(!data.success) throw new Error(data.error || 'Restore failed');
+    
+    showNotification(`✅ Timetable entry restored successfully!`, 'success');
+    loadArchiveTimetable();
+    
+  }catch(e){
+    console.error('[restoreArchivedTimetable]', e);
+    showNotification(`❌ Restore failed: ${e.message}`, 'error');
+  }
+}
+
+async function purgeArchivedTimetable(archiveId, subject){
+  if(!confirm(`⚠️ Permanently delete "${subject}" from archive?`)) return;
+  
+  try {
+    const resp = await fetch(`${window.AMS_CONFIG.API_URL}/api/archive/timetable/purge`, {
+      method:'DELETE',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ archive_id: archiveId })
+    });
+    
+    const data = await resp.json();
+    if(!data.success) throw new Error(data.error || 'Purge failed');
+    
+    showNotification(`✅ Timetable entry permanently deleted from archive`, 'success');
+    loadArchiveTimetable();
+    
+  }catch(e){
+    console.error('[purgeArchivedTimetable]', e);
+    showNotification(`❌ Purge failed: ${e.message}`, 'error');
+  }
 }
