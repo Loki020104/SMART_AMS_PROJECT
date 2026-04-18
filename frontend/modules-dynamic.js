@@ -68,7 +68,7 @@ const ModuleConfig = {
   },
   admin: {
     'dashboard': { name: 'Dashboard', icon: '📊', reload: true },
-    'users': { name: 'User Management', endpoint: '/api/users' },
+    'users': { name: 'User Management', endpoint: '/api/users/list' },
     'departments': { name: 'Departments', endpoint: '/api/departments' },
     'register': { name: 'Face Registration', widget: true },
     'config': { name: 'System Configuration', form: true },

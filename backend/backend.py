@@ -5862,6 +5862,8 @@ def bulk_import_users():
     if not users:
         return jsonify(success=False, error="No users provided"), 400
 
+    logger.info(f"[BULK_IMPORT] Starting import of {len(users)} users")
+    
     import hashlib, re
     created, failed = [], []
     faculty_dept_counters = {}
@@ -5988,14 +5990,34 @@ def bulk_import_users():
                 "created_at":  datetime.utcnow().isoformat(),
             }
             
-            result = sb.table("users").insert(payload).execute()
-            created.append(result.data[0] if result.data else {"username": username})
+            try:
+                result = sb.table("users").insert(payload).execute()
+                if result and result.data:
+                    inserted_user = result.data[0] if isinstance(result.data, list) else result.data
+                    # Sync to Firebase
+                    if _fstore:
+                        write_to_firestore("users", inserted_user.get("id", username), inserted_user)
+                    created.append(inserted_user)
+                else:
+                    failed.append({
+                        "username": username,
+                        "error": "Insert returned no data"
+                    })
+            except Exception as insert_error:
+                failed.append({
+                    "username": username,
+                    "error": f"Insert failed: {str(insert_error)}"
+                })
+                logger.error(f"[BULK_IMPORT] Insert error for {username}: {insert_error}")
+                continue
         except Exception as e:
             failed.append({
                 "username": u.get("username") or u.get("email") or f"row_{idx}",
                 "error": f"Database error: {str(e)}"
             })
 
+    logger.info(f"[BULK_IMPORT] Completed: {len(created)} created, {len(failed)} failed")
+    
     return jsonify(success=True,
                    created=len(created), failed=len(failed),
                    errors=failed[:50])  # Return first 50 errors only to avoid huge responses

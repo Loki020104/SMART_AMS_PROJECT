@@ -948,44 +948,48 @@ function loadAdminQRDashboard(){
   
   (async () => {
     try {
-      const res = await fetch(`${window.AMS_CONFIG.API_URL}/api/attendance/dashboard`);
+      const res = await fetch(`${window.AMS_CONFIG.API_URL}/api/attendance`);
       if(!res.ok) throw new Error(`HTTP ${res.status}`);
       
       const data = await res.json();
+      const records = data.records || [];
       
-      if(data.summary) {
+      // Calculate summary stats
+      const total_sessions = records.length;
+      const verified_attendance = records.filter(r => r.status === 'present' || r.status === 'verified').length;
+      const pending_attendance = records.filter(r => r.status === 'pending').length;
+      const verification_rate = total_sessions > 0 ? verified_attendance / total_sessions : 0;
+      
+      if(records.length > 0 || total_sessions > 0) {
         // Show summary stats
         container.innerHTML = `<div style="padding: 1rem;">
           <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
             <div style="background: var(--ink3); padding: 1rem; border-radius: var(--radius); text-align: center;">
-              <div style="font-size: 1.5rem; font-weight: 700; color: var(--blue3);">${data.summary.total_sessions || 0}</div>
-              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Total Sessions</div>
+              <div style="font-size: 1.5rem; font-weight: 700; color: var(--blue3);">${total_sessions}</div>
+              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Total Records</div>
             </div>
             <div style="background: var(--ink3); padding: 1rem; border-radius: var(--radius); text-align: center;">
-              <div style="font-size: 1.5rem; font-weight: 700; color: var(--green2);">${data.summary.verified_attendance || 0}</div>
-              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Verified</div>
+              <div style="font-size: 1.5rem; font-weight: 700; color: var(--green2);">${verified_attendance}</div>
+              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Present</div>
             </div>
             <div style="background: var(--ink3); padding: 1rem; border-radius: var(--radius); text-align: center;">
-              <div style="font-size: 1.5rem; font-weight: 700; color: var(--orange);">${data.summary.pending_attendance || 0}</div>
+              <div style="font-size: 1.5rem; font-weight: 700; color: var(--orange);">${pending_attendance}</div>
               <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Pending</div>
             </div>
             <div style="background: var(--ink3); padding: 1rem; border-radius: var(--radius); text-align: center;">
-              <div style="font-size: 1.5rem; font-weight: 700; color: var(--teal);">${Math.round((data.summary.verification_rate || 0) * 100)}%</div>
-              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Verification Rate</div>
+              <div style="font-size: 1.5rem; font-weight: 700; color: var(--teal);">${Math.round(verification_rate * 100)}%</div>
+              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Present Rate</div>
             </div>
           </div>
-          ${data.today ? `<div style="background: var(--ink2); padding: 1rem; border-radius: var(--radius); border-left: 3px solid var(--blue);">
-            <div style="font-weight: 600; margin-bottom: 0.5rem;">Today's Statistics</div>
+          <div style="background: var(--ink2); padding: 1rem; border-radius: var(--radius); border-left: 3px solid var(--blue);">
+            <div style="font-weight: 600; margin-bottom: 0.5rem;">Attendance Overview</div>
             <div style="font-size: 0.85rem; color: var(--text2);">
-              ${data.today.sessions || 0} sessions • ${data.today.students || 0} students marked
+              ${total_sessions} total records • ${verified_attendance} marked present • ${pending_attendance} pending
             </div>
-          </div>` : ''}
+          </div>
         </div>`;
-      } else if(Array.isArray(data)) {
-        // Render as table if array
-        container.innerHTML = window.renderDataTable ? window.renderDataTable(data) : JSON.stringify(data);
       } else {
-        container.innerHTML = '<div class="text-muted text-sm" style="padding:1rem">No dashboard data available</div>';
+        container.innerHTML = '<div class="text-muted text-sm" style="padding:1rem">No attendance records found</div>';
       }
     } catch(e) {
       console.error('[QR Dashboard]', e);
@@ -1701,7 +1705,7 @@ async function startFaceAtt(){
   document.getElementById('faceAttSection').style.display='block';
   document.getElementById('attPanel').style.display='none';
   const body=document.getElementById('faceAttBody');
-  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading" style="animation:spin 1.2s linear infinite">📍</div><p class="fw-semibold">Verifying location…</p></div>`;
+  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading">📍</div><p class="fw-semibold">Verifying location…</p></div>`;
   try{
     const loc=await getLocation();
     const inCampus=isInCollege(loc.lat,loc.lng);
@@ -1741,7 +1745,7 @@ async function captureFaceAtt(){
   const loadingOverlay = document.createElement('div');
   loadingOverlay.id = 'captureLoadingOverlay';
   loadingOverlay.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:100;border-radius:inherit';
-  loadingOverlay.innerHTML = `<div style="text-align:center;color:white"><div style="font-size:24px;animation:spin 1.2s linear infinite">🔍</div><p style="margin-top:0.5rem">Capturing face…</p></div>`;
+  loadingOverlay.innerHTML = `<div style="text-align:center;color:white"><div style="font-size:24px">🔍</div><p style="margin-top:0.5rem">Capturing face…</p></div>`;
   cameraWrap.appendChild(loadingOverlay);
   
   // Wait longer for video to fully settle and render (1.5 seconds)
@@ -1792,7 +1796,7 @@ async function captureFaceAtt(){
   AMS.lastCapturedImage = imageData;
   
   // Now verify the captured face against stored encodings
-  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading" style="animation:spin 1.2s linear infinite">🔍</div><p class="fw-semibold">Verifying face…</p></div>`;
+  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading">🔍</div><p class="fw-semibold">Verifying face…</p></div>`;
   const result=await verifyFace(imageData);
 
   if(result.verified){
@@ -1951,7 +1955,7 @@ async function processQRAttendance(qrData){
   _qrSession.subject='Class Session';
 
   const body=document.getElementById('qrScanBody');
-  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading" style="animation:spin 1.2s linear infinite">📍</div><p>Getting your location…</p></div>`;
+  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading">📍</div><p>Getting your location…</p></div>`;
   try{
     // 1. Check attendance window first
     if(!isWithinAttendanceWindow()){
@@ -2014,7 +2018,7 @@ async function processQRAttendance(qrData){
 
 async function captureQRFace(){
   const body=document.getElementById('qrScanBody');
-  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading" style="animation:spin 1.2s linear infinite">🔍</div><p>Capturing face…</p></div>`;
+  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading">🔍</div><p>Capturing face…</p></div>`;
 
   await new Promise(r=>setTimeout(r,1500));
 
@@ -2040,7 +2044,7 @@ async function captureQRFace(){
     return;
   }
 
-  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading" style="animation:spin 1.2s linear infinite">🔍</div><p>Verifying face &amp; submitting attendance…</p></div>`;
+  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading">🔍</div><p>Verifying face &amp; submitting attendance…</p></div>`;
 
   try{
     const resp=await fetch(`${window.AMS_CONFIG.API_URL}/api/qr/mark-attendance`,{
@@ -6060,14 +6064,14 @@ function renderAdminDashboard(){
     <div class="stat-card teal"><div class="s-icon">📊</div><div class="s-val" id="adminAvgAtt">—</div><div class="s-lbl">Today's Attendance</div></div>
     <div class="stat-card orange"><div class="s-icon">🎓</div><div class="s-val" id="ad-courses">—</div><div class="s-lbl">Active Courses</div></div>
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem">
-    <div class="card">
-      <div class="card-header"><div class="card-title">📊 Today's Attendance Rate</div></div>
-      <div id="ad-attchart" class="bar-chart mt-md"><div class="text-muted text-sm" style="padding:.5rem">Loading…</div></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-bottom:1.5rem">
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem;backdrop-filter:blur(10px);min-height:450px;display:flex;flex-direction:column">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem"><div style="font-size:1rem;font-weight:700">📊 Today's Attendance Rate</div></div>
+      <div id="ad-attchart" style="flex:1;display:flex;align-items:center;justify-content:center"><div style="color:var(--text2);font-size:0.875rem;padding:0.5rem">Loading…</div></div>
     </div>
-    <div class="card">
-      <div class="card-header"><div class="card-title">⚡ Admin Actions</div></div>
-      <div style="display:flex;flex-direction:column;gap:.5rem">
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem;backdrop-filter:blur(10px);min-height:450px;display:flex;flex-direction:column">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem"><div style="font-size:1rem;font-weight:700">⚡ Admin Actions</div></div>
+      <div style="display:flex;flex-direction:column;gap:0.5rem;flex:1;overflow-y:auto">
         <button class="btn btn-primary w-full" onclick="loadModule('a-users','User Management')">👥 Add New User</button>
         <button class="btn btn-teal w-full" onclick="loadModule('a-register','Face Registration')">👤 Register Student Face</button>
         <button class="btn btn-outline w-full" onclick="loadModule('a-logs','Audit Logs')">📋 View Audit Logs</button>
@@ -6078,9 +6082,9 @@ function renderAdminDashboard(){
       </div>
     </div>
   </div>
-  <div class="card">
-    <div class="card-header"><div class="card-title">📢 Recent Activity (Live)</div></div>
-    <div id="ad-activity"><div class="text-muted text-sm" style="padding:1rem">Loading…</div></div>
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem;backdrop-filter:blur(10px);margin-bottom:1.25rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem"><div style="font-size:1rem;font-weight:700">📢 Recent Activity (Live)</div></div>
+    <div id="ad-activity" style="color:var(--text2);font-size:0.875rem;padding:1rem">Loading…</div>
   </div>`;
 }
 
@@ -6152,13 +6156,22 @@ async function loadAdminDashboardData(){
     // Attendance fallback when RTDB is unavailable or empty
     const attEl=document.getElementById('adminAvgAtt');
     if(attEl && (attEl.textContent==='—' || attEl.textContent==='0%')){
-      const attRes=await fetch(`${window.AMS_CONFIG.API_URL}/api/attendance?date=${today}`).catch(()=>null);
+      const attRes=await fetch(`${window.AMS_CONFIG.API_URL}/api/attendance`).catch(()=>null);
       if(attRes&&attRes.ok){
         const a=await attRes.json();
         const records=a.records||[];
         const present=records.filter(r=>((r.status||'').toLowerCase()==='present') || (r.status||'').toLowerCase()==='late').length;
         const pct=records.length?Math.round((present/records.length)*100):0;
         attEl.textContent=pct+'%';
+        const chart=document.getElementById('ad-attchart');
+        if(chart){
+          chart.innerHTML=`<div class="bar-row">
+            <div class="bar-label text-xs">Present</div>
+            <div class="bar-fill"><div class="bar-inner" style="width:${pct}%;background:linear-gradient(90deg,var(--blue),var(--teal))"></div></div>
+            <div class="bar-val text-xs">${present}/${records.length}</div>
+          </div>
+          <p class="text-muted text-sm" style="margin-top:.5rem">Attendance count — ${pct}% present.</p>`;
+        }
       }
     }
   }catch(e){ console.error('[Admin Dashboard]',e); }
@@ -6870,7 +6883,7 @@ async function ttLoadGrid(){
   </div>
   <div style="display:flex;gap:.25rem;margin-top:.3rem">
     <button class="btn btn-outline btn-sm" style="padding:1px 5px;font-size:.7rem" onclick="ttOpenSlotModal('${c.id}')">✏️</button>
-    <button class="btn btn-danger btn-sm" style="padding:1px 5px;font-size:.7rem" onclick="ttDeleteSlot('${c.id}')">🗑️</button>
+    <button class="btn btn-danger btn-sm" style="padding:1px 3px;font-size:.65rem" onclick="ttDeleteSlot('${c.id}')">🗑️</button>
     <button class="btn btn-outline btn-sm" style="padding:1px 5px;font-size:.7rem" onclick="ttOpenSubModal('${c.id}','${(c.faculty_name||'').replace(/'/g,'\\\'')}')" title="Assign substitute">🔄</button>
   </div>
 </div>`;
@@ -7303,7 +7316,7 @@ ${entries.map(e=>`<tr>
   <td style="border:1px solid var(--border);padding:.35rem .5rem">
     <div style="display:flex;gap:.25rem">
       <button class="btn btn-outline btn-sm" style="padding:2px 5px;font-size:.72rem" onclick="ttOpenSlotModal('${e.id}')">✏️</button>
-      <button class="btn btn-danger btn-sm"  style="padding:2px 5px;font-size:.72rem" onclick="ttDeleteSlot('${e.id}')">🗑️</button>
+      <button class="btn btn-danger btn-sm"  style="padding:1px 3px;font-size:.65rem" onclick="ttDeleteSlot('${e.id}')">🗑️</button>
       <button class="btn btn-outline btn-sm" style="padding:2px 5px;font-size:.72rem" onclick="ttOpenSubModal('${e.id}','${(e.faculty_name||'').replace(/'/g,'\\\'')}')" title="Substitute">🔄</button>
     </div>
   </td>
@@ -8218,14 +8231,14 @@ function renderUserManagement(){
   window._umSelected = new Set();
   return `
   <!-- Tab bar -->
-  <div class="card" style="padding:.5rem 1rem">
+  <div class="card" style="padding:.75rem 1rem">
     <div class="d-flex gap-md" style="flex-wrap:wrap">
-      <button class="btn btn-primary btn-sm" onclick="setUMTab('list')" id="umTabList">👥 All Users</button>
-      <button class="btn btn-outline btn-sm" onclick="setUMTab('add')" id="umTabAdd">➕ Add User</button>
-      <button class="btn btn-outline btn-sm" onclick="setUMTab('bulk')" id="umTabBulk">📥 Bulk Import</button>
-      <button class="btn btn-outline btn-sm" onclick="setUMTab('assign')" id="umTabAssign">📚 Assign Subjects</button>
-      <button class="btn btn-outline btn-sm" style="border-color:#ef4444;color:#ef4444" onclick="setUMTab('delete')" id="umTabDelete">🗑️ Delete Users</button>
-      <button class="btn btn-outline btn-sm" style="border-color:#9333ea;color:#9333ea" onclick="setUMTab('archive');loadArchiveUsers()" id="umTabArchive">📦 Archive</button>
+      <button class="btn-gradient-border btn-gradient-border-default" onclick="setUMTab('list')" id="umTabList">➕ Add User</button>
+      <button class="btn-gradient-border btn-gradient-border-default" onclick="setUMTab('add')" id="umTabAdd">➕ Add User</button>
+      <button class="btn-gradient-border btn-gradient-border-default" onclick="setUMTab('bulk')" id="umTabBulk">📥 Bulk Import</button>
+      <button class="btn-gradient-border btn-gradient-border-default" onclick="setUMTab('assign')" id="umTabAssign">📚 Assign Subjects</button>
+      <button class="btn-gradient-border btn-gradient-border-delete" onclick="setUMTab('delete')" id="umTabDelete">🗑️ Delete Users</button>
+      <button class="btn-gradient-border btn-gradient-border-archive" onclick="setUMTab('archive');loadArchiveUsers()" id="umTabArchive">📦 Archive</button>
     </div>
   </div>
 
@@ -8251,11 +8264,10 @@ function renderUserManagement(){
         <button class="btn btn-sm" title="Remove duplicate roll numbers" onclick="fixDuplicateRolls()" style="white-space:nowrap;flex:0;padding:.5rem .9rem;font-size:.9rem;font-weight:600;background:#f59e0b;color:#fff;border:none;cursor:pointer;border-radius:var(--radius-sm);display:inline-flex;align-items:center;gap:.4rem;transition:all .2s ease">🧹 Duplicates</button>
       </div>
     </div>
-    <div id="umBulkBar" style="display:none;padding:.6rem 1rem;background:#fef2f2;border-bottom:2px solid #fca5a5;flex-direction:row;align-items:center;gap:1rem;flex-wrap:wrap">
-      <span id="umBulkCount" style="font-size:.85rem;font-weight:700;color:#991b1b;white-space:nowrap;flex:0">0 selected</span>
-      <button class="btn btn-sm" style="background:#3b82f6;color:#fff;border:none;cursor:pointer;padding:.5rem .9rem;border-radius:var(--radius-sm);font-weight:600;font-size:.9rem;white-space:nowrap;flex:0;display:inline-flex;align-items:center;gap:.4rem;transition:all .2s ease;box-shadow:0 2px 4px rgba(0,0,0,0.1)" onmouseover="this.style.background='#2563eb'" onmouseout="this.style.background='#3b82f6'" onclick="umArchiveSelected()">📦 Archive</button>
-      <button class="btn btn-sm" style="background:#ef4444;color:#fff;border:none;cursor:pointer;padding:.5rem .9rem;border-radius:var(--radius-sm);font-weight:600;font-size:.9rem;white-space:nowrap;flex:0;display:inline-flex;align-items:center;gap:.4rem;transition:all .2s ease;box-shadow:0 2px 4px rgba(0,0,0,0.1)" onmouseover="this.style.background='#dc2626'" onmouseout="this.style.background='#ef4444'" onclick="umDeleteSelected()">🗑️ Delete</button>
-      <button class="btn btn-outline btn-sm" style="cursor:pointer;padding:.5rem .9rem;font-size:.9rem;white-space:nowrap;flex:0;border:2px solid #999;background:#fff;color:#333;border-radius:var(--radius-sm);font-weight:600;display:inline-flex;align-items:center;gap:.4rem;transition:all .2s ease" onmouseover="this.style.background='#f3f4f6'" onmouseout="this.style.background='#fff'" onclick="umClearSelection()">✕ Clear</button>
+    <div id="umBulkBar" style="display:none;padding:1rem;background:rgba(239,68,68,.08);border-bottom:2px solid #ef4444;flex-direction:row;align-items:center;gap:1rem;flex-wrap:wrap;border-radius:8px;margin-bottom:1rem;display:flex">
+      <span id="umBulkCount" style="font-size:.9rem;font-weight:600;color:#ef4444">0 selected</span>
+      <button class="btn btn-danger btn-sm" onclick="umDeleteSelected()">🗑️ Delete Selected</button>
+      <button class="btn btn-outline btn-sm" onclick="umClearSelection()">✕ Clear</button>
     </div>
     <div class="tbl-wrap" style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:var(--radius-sm)">
       <table style="min-width:100%;width:100%">
@@ -8264,13 +8276,20 @@ function renderUserManagement(){
           <th style="padding:.5rem;min-width:90px;font-size:.9rem">ID / Roll</th>
           <th style="padding:.5rem;min-width:120px;font-size:.9rem">Name</th>
           <th style="padding:.5rem;min-width:70px;font-size:.9rem">Role</th>
-          <th style="padding:.5rem;min-width:140px;font-size:.9rem">Dept / Info</th>
           <th style="padding:.5rem;min-width:150px;font-size:.9rem">Email</th>
           <th style="padding:.5rem;min-width:70px;font-size:.9rem">Status</th>
           <th style="padding:.5rem;min-width:100px;font-size:.9rem">Actions</th>
         </tr></thead>
-        <tbody id="userTableBody"><tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text3)">Loading users…</td></tr></tbody>
+        <tbody id="userTableBody"><tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text3)">Loading users…</td></tr></tbody>
       </table></div>
+    <div id="umPaginationBar" style="padding:1rem;display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;border-top:1px solid var(--border);margin-top:1rem">
+      <span id="umPageInfo" style="font-size:.85rem;color:var(--text2)">Page 1 of 1</span>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-outline btn-sm" id="umPrevBtn" onclick="umPreviousPage()" disabled>← Previous</button>
+        <button class="btn btn-outline btn-sm" id="umNextBtn" onclick="umNextPage()" disabled>Next →</button>
+      </div>
+      <span id="umUserCount" style="font-size:.85rem;color:var(--text2)">0 users total</span>
+    </div>
   </div>
 
   <!-- Add User Tab -->
@@ -9275,7 +9294,7 @@ function previewBulkCSV(){
   if(!file) return;
   const reader = new FileReader();
   reader.onload = e => {
-    const lines = e.target.result.split(' ').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'));
+    const lines = e.target.result.split('\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'));
     const header = _parseCSVLine(lines[0]).map(h=>h.toLowerCase());
     _bulkRows = lines.slice(1).map(line=>{
       const vals = _parseCSVLine(line);
@@ -9289,16 +9308,22 @@ function previewBulkCSV(){
       if(!obj.email && obj.username) obj.email = obj.username+'@ams.edu';
       return obj;
     }).filter(r=>r.role&&r.full_name);
-    document.getElementById('bulkPreviewBody').innerHTML = _bulkRows.map((r,i)=>`
+    // Show only first 50 rows in preview (matches pagination)
+    const previewRows = _bulkRows.slice(0, 50);
+    document.getElementById('bulkPreviewBody').innerHTML = previewRows.map((r,i)=>`
       <tr>
         <td>${i+1}</td>
         <td><span class="badge badge-${r.role==='faculty'?'blue':r.role==='admin'?'red':'green'}">${r.role}</span></td>
-        <td>${r.full_name}</td><td>${r.username||r.roll_no||'—'}</td>
-        <td>${r.department||'—'}</td><td>${r.program||'—'}</td><td>${r.section||'—'}</td>
+        <td>${r.full_name}</td>
+        <td>${r.username||r.roll_no||'—'}</td>
+        <td>${r.department||'—'}</td>
+        <td>${r.program||'—'}</td>
+        <td>${r.section||'—'}</td>
       </tr>`).join('');
     document.getElementById('bulkPreviewWrap').style.display='block';
     document.getElementById('bulkImportResult').style.display='none';
-    toast(`Preview: ${_bulkRows.length} rows loaded`,'info');
+    const totalText = _bulkRows.length > 50 ? `Preview: First 50 of ${_bulkRows.length} rows` : `Preview: ${_bulkRows.length} rows loaded`;
+    toast(totalText,'info');
   };
   reader.readAsText(file);
 }
@@ -9324,7 +9349,7 @@ function downloadCSVTemplate(){
     'faculty,Dr. Meena Iyer,PUC26AIM001,meena@ams.edu,,AIM,AIM,,,PUC26AIM001,Assistant Professor,Machine Learning|Deep Learning,',
     'faculty,Prof. Raj Verma,PUC26ECE001,raj@ams.edu,,ECE,ECE,,,PUC26ECE001,HoD,VLSI Design|Signals,',
   ];
-  const blob=new Blob([rows.join(' ')],{type:'text/csv'});
+  const blob=new Blob([rows.join('\n')],{type:'text/csv'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ams_bulk_template.csv';a.click();
 }
 
@@ -9638,16 +9663,12 @@ async function reloadUserListQuietly(){
       const users = data.users||[];
       const tbody = document.getElementById('userTableBody');
       if(tbody && users.length){
+        window._umAllUsers = users;
+        window._umCurrentPage = 0;
+        window._umPageSize = 50;
         window._umUserMap = {};
-        users.forEach(u=>{ window._umUserMap[u.id]=u; });
-        tbody.innerHTML=users.map(u=>{
-          const suspended = u.is_active===false;
-          const idLabel = u.role==='student'?(u.roll_no||u.username||'—'):u.role==='faculty'?(u.employee_id||u.username||'—'):(u.username||'admin');
-          const line2 = u.role==='faculty'?[u.program, u.designation].filter(Boolean).join(' · '):[u.program, u.section].filter(Boolean).join(' · ');
-          const infoCell = `<span style="font-size:.82rem;font-weight:600">${u.department||'—'}</span>${line2?`<br><span style="font-size:.72rem;color:var(--text3)">${line2}</span>`:''}${u.role==='faculty'&&u.subjects?`<br><span style="font-size:.7rem;color:var(--text2);" title="${(u.subjects).replace(/\"/g,'&quot;')}">${u.subjects.length>30?u.subjects.slice(0,30)+'…':u.subjects}</span>`:''}` ;
-          const statusLabel = suspended?'<span style="color:#ef4444;font-size:.75rem">🚫 SUSPENDED</span>':'<span style="color:#16a34a;font-size:.75rem">✓ Active</span>';
-          return `<tr class="um-row" data-id="${u.id}" style="${suspended?'opacity:0.6;':''}"><td><input type="checkbox" class="um-row-chk" data-id="${u.id}" onchange="umUpdateBulkBar()"/></td><td><strong>${idLabel}</strong>${u.full_name?`<br><span style="color:var(--text3);font-size:.75rem">${u.full_name}</span>`:''}${u.email?`<br><span style="color:var(--text3);font-size:.72rem">${u.email}</span>`:''}</td><td>${infoCell}</td><td>${u.role==='faculty'?'👨‍🏫Fac':u.role==='student'?'👤Std':'🔐Admin'}</td><td>${statusLabel}</td><td><button class="btn btn-ghost btn-sm" title="Edit" onclick="openEditUser(${JSON.stringify(u).replace(/\"/g,'&quot;')})\">✏️</button> <button class="btn btn-ghost btn-sm" title="${suspended?'Activate':'Suspend'}" onclick="${suspended?'activateUser':'suspendUser'}('${u.id}')\">💤</button> <button class="btn btn-danger btn-sm" title="Delete" onclick="if(confirm('Permanently delete this user?'))deleteUser('${u.id}')\">🗑️</button></td></tr>`;
-        }).join('');       }     }   }catch(e){     console.log('[reloadUserListQuietly] Background reload skipped:', e.message);   } }
+        users.forEach(u => window._umUserMap[u.id] = u);
+        umRenderUserPage();
 
 async function loadUserList(){
   try{
@@ -9663,111 +9684,148 @@ async function loadUserList(){
     if(params.length) url += '?' + params.join('&');
 
     console.log('[loadUserList] Fetch URL:', url);
-    const controller = new AbortController();
-    const timeout = setTimeout(() => {
-      console.warn('[loadUserList] Timeout after 30 seconds - backend may be initializing or overloaded');
-      controller.abort();
-    }, 30000); // 30 second timeout for cold Cloud Run startup
 
-    // Get Firebase auth token for secure API call
-    const headers = {};
-    console.log('[loadUserList] Checking Firebase auth:', {
-      hasFirebaseAuth: !!window.firebaseAuth,
-      hasCurrentUser: !!(window.firebaseAuth?.currentUser),
-      userEmail: window.firebaseAuth?.currentUser?.email || 'none'
-    });
-    
-    try{
-      const token = await window.getFirebaseToken();
-      console.log('[loadUserList] Token retrieval result:', {
-        tokenExists: !!token,
-        tokenLength: token?.length || 0
-      });
-      
-      if(token){
-        headers['Authorization'] = `Bearer ${token}`;
-        console.log('[loadUserList] Using authenticated request');
-      }else{
-        console.warn('[loadUserList] No Firebase token available - user may not be logged in');
+    let resp = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json'
       }
-    }catch(e){
-      console.warn('[loadUserList] Failed to get Firebase token:', {message: e.message, error: e});
-    }
-
-    const resp = await fetch(url, {
-      signal: controller.signal,
-      headers: headers
     }).catch((err)=>{
-      console.warn('[loadUserList] Fetch failed:', err.message);
+      console.error('[loadUserList] Fetch error:', err.message, err);
       return null;
     });
     
-    clearTimeout(timeout);
-    
-    if(!resp||!resp.ok) {
-      console.error('[loadUserList] Response not ok:', resp?.status);
+    if(!resp) {
+      console.error('[loadUserList] No response received');
       const tbody = document.getElementById('userTableBody');
       if(tbody) {
-        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:2rem;color:#f85149"><strong>❌ Failed to load users</strong><br/><small style="color:var(--text3)">Backend may be unavailable. Try refreshing the page.</small></td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:2rem;color:#f85149"><strong>❌ Failed to load users</strong><br/><small style="color:var(--text3)">Network error - no response from server</small></td></tr>';
       }
-      throw new Error('Failed to fetch users - status ' + (resp?.status || 'timeout'));
+      return;
     }
     
-    const data = await resp.json();
-    console.log('[loadUserList] Received', (data.users||[]).length, 'users');
+    if(!resp.ok) {
+      console.error('[loadUserList] Response not ok - Status:', resp.status, resp.statusText);
+      const tbody = document.getElementById('userTableBody');
+      if(tbody) {
+        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:2rem;color:#f85149"><strong>❌ Failed to load users</strong><br/><small style="color:var(--text3)">Error: HTTP ' + resp.status + ' ' + resp.statusText + '</small></td></tr>';
+      }
+      return;
+    }
+    
+    const data = await resp.json().catch((err)=>{
+      console.error('[loadUserList] JSON parse error:', err);
+      return null;
+    });
+    
+    if(!data||!data.users) {
+      console.error('[loadUserList] Invalid data structure:', data);
+      const tbody = document.getElementById('userTableBody');
+      if(tbody) tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:2rem;color:#f85149">No users found</td></tr>';
+      return;
+    }
+    
+    console.log('[loadUserList] Received', data.users.length, 'users');
     
     const users = data.users||[];
     const tbody = document.getElementById('userTableBody');
     if(!tbody) return;
     if(!users.length){
       console.warn('[loadUserList] No users found');
-      tbody.innerHTML='<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text3)">🚫 No users found</td></tr>';
+      tbody.innerHTML='<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text3)">🚫 No users found</td></tr>';
       return;
     }
     
     // Store users globally for pagination
     window._umAllUsers = users;
     window._umCurrentPage = 0;
-    window._umPageSize = 100;
+    window._umPageSize = 50;
+    window._umUserMap = {};
+    users.forEach(u => window._umUserMap[u.id] = u);
     
-    // Render first page
-    _umRenderPage(0);
-    tbody.innerHTML=users.map(u=>{
-      const suspended = u.is_active===false;
-      const idLabel = u.role==='student'
-        ? (u.roll_no||u.username||'—')
-        : u.role==='faculty'
-          ? (u.employee_id||u.username||'—')
-          : (u.username||'admin');
-      // Build compact dept/info cell: dept, program, section or designation
-      const line2 = u.role==='faculty'
-        ? [u.program, u.designation].filter(Boolean).join(' · ')
-        : [u.program, u.section].filter(Boolean).join(' · ');
-      const infoCell = `<span style="font-size:.82rem;font-weight:600">${u.department||'—'}</span>${line2?`<br><span style="font-size:.72rem;color:var(--text3)">${line2}</span>`:''}${u.role==='faculty'&&u.subjects?`<br><span style="font-size:.7rem;color:var(--text2);" title="${(u.subjects).replace(/"/g,'&quot;')}">${u.subjects.length>30?u.subjects.slice(0,30)+'…':u.subjects}</span>`:''}` ;
-      return `<tr>
-        <td style="width:2rem"><input type="checkbox" class="um-row-chk" data-id="${u.id}" onchange="umUpdateBulkBar()" style="cursor:pointer;width:1rem;height:1rem"/></td>
-        <td class="fw-semibold" style="font-size:.82rem;white-space:nowrap">${idLabel}</td>
-        <td style="white-space:nowrap;font-weight:500">${u.full_name||u.username}</td>
-        <td><span class="badge badge-${u.role==='admin'?'red':u.role==='faculty'?'blue':'green'}">${u.role}</span></td>
-        <td style="max-width:180px">${infoCell}</td>
-        <td style="font-size:.8rem;color:var(--text2)">${u.email||'—'}</td>
-        <td><span class="badge badge-${suspended?'red':'green'}">${suspended?'Suspended':'Active'}</span></td>
-        <td style="white-space:nowrap">
-          <div style="display:flex;gap:.3rem;align-items:center">
-            <button class="btn btn-outline btn-sm" title="Edit" onclick="openEditUser(window._umUserMap['${u.id}'])">✏️</button>
-            ${suspended
-              ?`<button class="btn btn-success btn-sm" title="Activate" onclick="toggleUserSuspend('${u.id}',false)">▶</button>`
-              :`<button class="btn btn-orange btn-sm" title="Suspend" onclick="toggleUserSuspend('${u.id}',true)">⏸</button>`
-            }
-            <button class="btn btn-danger btn-sm" title="Delete" onclick="if(confirm('Permanently delete this user?'))deleteUser('${u.id}')">🗑️</button>
-          </div>
-        </td>
-      </tr>`;
-    }).join('');
+    // Render first page using pagination
+    umRenderUserPage();
     populateDeptDropdowns();
   }catch(e){
+    console.error('[loadUserList] Exception caught:', e.message, e);
     const tbody = document.getElementById('userTableBody');
-    if(tbody) tbody.innerHTML='<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text3)">Failed to load users</td></tr>';
+    if(tbody) tbody.innerHTML='<tr><td colspan="7" style="text-align:center;padding:2rem;color:#f85149"><strong>❌ Failed to load users</strong><br/><small style="color:var(--text3)">Error: ' + (e.message || e) + '</small></td></tr>';
+  }
+}
+
+// ── PAGINATION FUNCTIONS ────────────────────────────────
+function umRenderUserPage(){
+  const users = window._umAllUsers || [];
+  const pageSize = window._umPageSize || 20;
+  const currentPage = window._umCurrentPage || 0;
+  const totalPages = Math.ceil(users.length / pageSize);
+  
+  // Get users for this page
+  const startIdx = currentPage * pageSize;
+  const endIdx = startIdx + pageSize;
+  const pageUsers = users.slice(startIdx, endIdx);
+  
+  // Render table rows
+  const tbody = document.getElementById('userTableBody');
+  if(!tbody) return;
+  
+  tbody.innerHTML = pageUsers.map(u => {
+    const suspended = u.is_active === false;
+    const idLabel = u.role === 'student'
+      ? (u.roll_no || u.username || '—')
+      : u.role === 'faculty'
+        ? (u.employee_id || u.username || '—')
+        : (u.username || 'admin');
+    
+    return `<tr>
+      <td style="width:2rem"><input type="checkbox" class="um-row-chk" data-id="${u.id}" onchange="umUpdateBulkBar()" style="cursor:pointer;width:1rem;height:1rem"/></td>
+      <td class="fw-semibold" style="font-size:.82rem;white-space:nowrap">${idLabel}</td>
+      <td style="white-space:nowrap;font-weight:500">${u.full_name || u.username}</td>
+      <td><span class="badge badge-${u.role === 'admin' ? 'red' : u.role === 'faculty' ? 'blue' : 'green'}">${u.role}</span></td>
+      <td style="font-size:.8rem;color:var(--text2)">${u.email || '—'}</td>
+      <td><span class="badge badge-${suspended ? 'red' : 'green'}">${suspended ? 'Suspended' : 'Active'}</span></td>
+      <td style="white-space:nowrap">
+        <div style="display:flex;gap:.3rem;align-items:center">
+          <button class="btn btn-outline btn-sm" title="Edit" onclick="openEditUser(window._umUserMap['${u.id}'])">✏️</button>
+          ${suspended
+            ? `<button class="btn btn-success btn-sm" title="Activate" onclick="toggleUserSuspend('${u.id}',false)">▶</button>`
+            : `<button class="btn btn-orange btn-sm" title="Suspend" onclick="toggleUserSuspend('${u.id}',true)">⏸</button>`
+          }
+          <button class="btn btn-danger btn-sm" title="Delete" onclick="if(confirm('Permanently delete this user?'))deleteUser('${u.id}')">🗑️</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+  
+  // Update pagination info
+  const pageInfo = document.getElementById('umPageInfo');
+  const prevBtn = document.getElementById('umPrevBtn');
+  const nextBtn = document.getElementById('umNextBtn');
+  const userCount = document.getElementById('umUserCount');
+  
+  if(pageInfo) pageInfo.textContent = `Page ${currentPage + 1} of ${totalPages}`;
+  if(prevBtn) prevBtn.disabled = currentPage === 0;
+  if(nextBtn) nextBtn.disabled = currentPage >= totalPages - 1;
+  if(userCount) userCount.textContent = `${users.length} users total`;
+}
+
+function umNextPage(){
+  const users = window._umAllUsers || [];
+  const pageSize = window._umPageSize || 50;
+  const totalPages = Math.ceil(users.length / pageSize);
+  
+  if(window._umCurrentPage < totalPages - 1){
+    window._umCurrentPage++;
+    umRenderUserPage();
+    window.scrollTo({top: 0, behavior: 'smooth'});
+  }
+}
+
+function umPreviousPage(){
+  if(window._umCurrentPage > 0){
+    window._umCurrentPage--;
+    umRenderUserPage();
+    window.scrollTo({top: 0, behavior: 'smooth'});
   }
 }
 
@@ -11266,7 +11324,7 @@ async function captureQRFaceAndLocation(sessionId,course){
   const name=document.getElementById('qrName').value.trim();
   if(!rollNo||!name){alert('Please enter Roll Number and Name');return;}
   const body=document.getElementById('qrAttContent');
-  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading" style="animation:spin 1.2s linear infinite">📍</div><p>Verifying location…</p></div>`;
+  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading">📍</div><p>Verifying location…</p></div>`;
   try{
     const loc=await getLocation();
     if(!isInCollege(loc.lat,loc.lng)){
@@ -11293,7 +11351,7 @@ async function captureQRFaceAndLocation(sessionId,course){
 async function captureQRFaceSnapshot(sessionId,course,rollNo,name){
   stopCamera();
   const body=document.getElementById('qrAttContent');
-  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading" style="animation:spin 1.2s linear infinite">🔍</div><p>Verifying face…</p></div>`;
+  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading">🔍</div><p>Verifying face…</p></div>`;
   setTimeout(()=>{
     body.innerHTML=`<div class="att-status">
       <div class="att-icon-wrap success">✅</div>
@@ -11493,7 +11551,7 @@ async function loadFacultySubjectStudents(subjectCode){
   if(!container) return;
   
   container.innerHTML = `<div style="text-align:center;padding:2rem">
-    <div class="loading" style="animation:spin 1.2s linear infinite;font-size:2rem">📚</div>
+    <div class="loading" style="font-size:2rem">📚</div>
     <p style="color:var(--text2)">Loading students...</p>
   </div>`;
   
@@ -11806,3 +11864,4 @@ async function purgeArchivedTimetable(archiveId, subject){
     showNotification(`❌ Purge failed: ${e.message}`, 'error');
   }
 }
+      
