@@ -553,6 +553,83 @@ function handleForgotPassword(){
   toast(`${roleLabel} password reset is handled by admin support. Please contact your administrator.`, 'info');
 }
 
+// ── PASSWORD VISIBILITY TOGGLE ──────────
+function togglePasswordVisibility(){
+  const passInput=document.getElementById('loginPass');
+  const btn=event.target.closest('button');
+  if(passInput.type==='password'){
+    passInput.type='text';
+    btn.textContent='🙈';
+  }else{
+    passInput.type='password';
+    btn.textContent='👁️';
+  }
+}
+
+// ── FORGOT PASSWORD MODAL ────────
+function showForgotPasswordModal(){
+  const html=`
+    <div style="background:white;border-radius:12px;padding:2rem;max-width:400px;box-shadow:0 10px 40px rgba(0,0,0,0.15)">
+      <h2 style="margin-top:0;color:var(--text1)">Reset Password</h2>
+      <p style="color:var(--text2);font-size:0.9rem">Enter your email address and we'll send you a link to reset your password.</p>
+      <input id="resetEmail" type="email" placeholder="Enter your email" style="width:100%;padding:0.75rem;border:1px solid var(--border);border-radius:6px;font-size:1rem;margin:1rem 0;box-sizing:border-box"/>
+      <div style="color:var(--text2);font-size:0.85rem;margin:1rem 0;min-height:1.2rem" id="resetMsg"></div>
+      <div style="display:flex;gap:1rem;margin-top:1.5rem">
+        <button onclick="sendPasswordResetEmail()" style="flex:1;padding:0.75rem;background:var(--blue2);color:white;border:none;border-radius:6px;cursor:pointer;font-size:1rem">Send Reset Link</button>
+        <button onclick="closeModal()" style="flex:1;padding:0.75rem;background:var(--border);color:var(--text1);border:none;border-radius:6px;cursor:pointer;font-size:1rem">Cancel</button>
+      </div>
+    </div>
+  `;
+  
+  const modal=document.createElement('div');
+  modal.id='forgotPasswordModal';
+  modal.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:9999';
+  modal.innerHTML=html;
+  modal.onclick=(e)=>{if(e.target===modal)closeModal()};
+  document.body.appendChild(modal);
+  setTimeout(()=>document.getElementById('resetEmail').focus(),100);
+}
+
+function closeModal(){
+  const modal=document.getElementById('forgotPasswordModal');
+  if(modal)modal.remove();
+}
+
+async function sendPasswordResetEmail(){
+  const email=document.getElementById('resetEmail').value.trim();
+  if(!email){toast('Enter email address','warning');return;}
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){toast('Invalid email','warning');return;}
+  
+  const msgDiv=document.getElementById('resetMsg');
+  msgDiv.textContent='📧 Sending...';
+  msgDiv.style.color='var(--text2)';
+  
+  try{
+    const resp=await fetch(`${window.AMS_CONFIG.API_URL}/api/users/send-reset-email`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email})
+    }).catch(()=>null);
+    
+    if(resp && resp.ok){
+      const data=await resp.json();
+      if(data.success){
+        msgDiv.textContent='✅ Check your email for reset link!';
+        msgDiv.style.color='var(--green)';
+        setTimeout(closeModal,2000);
+      }else{
+        msgDiv.textContent='❌ '+data.error;
+        msgDiv.style.color='var(--red)';
+      }
+    }else{
+      msgDiv.textContent='❌ Service not available';
+      msgDiv.style.color='var(--red)';
+    }
+  }catch(e){
+    msgDiv.textContent='❌ Connection error';
+    msgDiv.style.color='var(--red)';
+  }
+}
+
 async function doLogin(){
   const u=document.getElementById('loginUser').value.trim();
   const p=document.getElementById('loginPass').value;
