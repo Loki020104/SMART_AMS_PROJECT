@@ -118,6 +118,7 @@ try:
     BULK_ROUTES_AVAILABLE = True
 except ImportError:
     print("[WARNING] bulk_routes_enhanced module not found. Bulk import endpoints disabled.")
+    BULK_ROUTES_AVAILABLE = False
 
 # ── Analytics system (Linways-like) ────────────────────────────────
 try:
@@ -125,7 +126,7 @@ try:
     ANALYTICS_AVAILABLE = True
 except ImportError:
     print("[WARNING] analytics_linways module not found. Analytics endpoints disabled.")
-    BULK_ROUTES_AVAILABLE = False
+    ANALYTICS_AVAILABLE = False
 
 # ── Security hardening imports ────────────────────────────────────
 try:
