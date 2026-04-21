@@ -1,0 +1,31 @@
+{
+  "users": [
+    {
+      "role": "faculty",
+      "full_name": "Dr. John Smith",
+      "username": "john.smith",
+      "email": "john.smith@university.edu",
+      "employee_id": "FAC001",
+      "designation": "Assistant Professor",
+      "department": "Computer Science"
+    },
+    {
+      "role": "faculty",
+      "full_name": "Prof. Sarah Johnson",
+      "username": "sarah.johnson",
+      "email": "sarah.johnson@university.edu",
+      "employee_id": "FAC002",
+      "designation": "Professor",
+      "department": "Electronics"
+    },
+    {
+      "role": "faculty",
+      "full_name": "Dr. Rajesh Kumar",
+      "username": "rajesh.kumar",
+      "email": "rajesh.kumar@university.edu",
+      "employee_id": "FAC003",
+      "designation": "Associate Professor",
+      "department": "Mechanical"
+    }
+  ]
+}

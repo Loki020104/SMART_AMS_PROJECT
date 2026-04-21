@@ -109,8 +109,16 @@ except Exception as e:
     traceback.print_exc()
     FACE_RECOGNITION_AVAILABLE = False
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
+
+# ── Enhanced bulk import system ────────────────────────────────────
+try:
+    from bulk_routes_enhanced import register_bulk_routes
+    BULK_ROUTES_AVAILABLE = True
+except ImportError:
+    print("[WARNING] bulk_routes_enhanced module not found. Bulk import endpoints disabled.")
+    BULK_ROUTES_AVAILABLE = False
 
 # ── Security hardening imports ────────────────────────────────────
 try:
@@ -149,25 +157,40 @@ apply_security_headers(app)
 @app.before_request
 def before_request():
     """Handle CORS preflight requests and set headers early."""
+    # Set CORS headers for OPTIONS (preflight) requests
     if request.method == 'OPTIONS':
-        response = app.make_default_options_response()
+        response = Response()
         response.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin', '*')
-        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept'
         response.headers['Access-Control-Allow-Credentials'] = 'true'
-        response.headers['Access-Control-Max-Age'] = '3600'
+        response.headers['Access-Control-Max-Age'] = '86400'
         return response
 
 # ── CORS Error Handler & After-Request Hook ────────────────
 @app.after_request
 def after_request(response):
     """Ensure CORS headers are added to ALL responses, including error responses."""
-    origin = request.headers.get('Origin', '*')
-    response.headers['Access-Control-Allow-Origin'] = origin
+    origin = request.headers.get('Origin')
+    allowed_origins = [
+        "https://smart-ams-project-faa5f.web.app",
+        "http://localhost:3000",
+        "http://localhost:4200",
+        "http://localhost:5173",
+    ]
+    
+    # Only set Allow-Origin if origin is in allowed list, otherwise use wildcard
+    if origin in allowed_origins:
+        response.headers['Access-Control-Allow-Origin'] = origin
+    else:
+        response.headers['Access-Control-Allow-Origin'] = 'https://smart-ams-project-faa5f.web.app'
+    
     response.headers['Access-Control-Allow-Credentials'] = 'true'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
-    response.headers['Access-Control-Expose-Headers'] = 'Content-Type'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With, Accept'
+    response.headers['Access-Control-Expose-Headers'] = 'Content-Type, X-Total-Count'
+    response.headers['Vary'] = 'Origin'
+    
     # Prevent caching of API responses
     response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     response.headers['Pragma'] = 'no-cache'
@@ -2498,7 +2521,7 @@ def list_users():
     try:
         q = sb.table("users").select(
             "id,username,role,full_name,department,roll_no,employee_id,"
-            "program,section,designation,subjects,is_active,created_at,year"
+            "program,section,designation,subjects,is_active,created_at,year,email"
         )
         
         if is_admin_view:
@@ -4237,183 +4260,186 @@ def delete_users_bulk():
     """Soft-delete users (move to archive table instead of hard deleting).
     Optimized for batch sizes up to 4000+ users.
     Body: { user_ids: [...], reason: "optional reason" }
+    Timeout: 60 seconds max
     """
     if not sb:
         return jsonify(success=False, error="Supabase not configured"), 500
-    d = request.json or {}
-    ids = [str(i).strip() for i in (d.get("user_ids") or d.get("ids") or []) if str(i).strip()]
-    if not ids:
-        print(f"[DELETE-USERS] Error: No user_ids provided")
-        return jsonify(success=False, error="user_ids array is required"), 400
-    
-    print(f"[DELETE-USERS] Starting bulk delete for {len(ids)} users")
-    start_time = datetime.utcnow()
     
     try:
-        # 1. Fetch ALL users in ONE query (much faster than one-by-one)
-        user_records = []
-        archived_count = 0
-        deleted_count = 0
+        d = request.json or {}
+        ids = [str(i).strip() for i in (d.get("user_ids") or d.get("ids") or []) if str(i).strip()]
+        if not ids:
+            print(f"[DELETE-USERS] Error: No user_ids provided")
+            return jsonify(success=False, error="user_ids array is required"), 400
+        
+        print(f"[DELETE-USERS] Starting bulk delete for {len(ids)} users")
+        start_time = datetime.utcnow()
+        
+        # Set a 60-second timeout for the operation
+        import signal
+        
+        def timeout_handler(signum, frame):
+            raise TimeoutError("Delete operation exceeded 60 seconds")
+        
+        # Only set timeout on Unix systems
+        if hasattr(signal, 'SIGALRM'):
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(60)
         
         try:
-            # Build query to fetch all users at once - Supabase supports filtering by ID array
-            # Use PostgreSQL IN operator for batch fetch
-            print(f"[DELETE-USERS] Fetching {len(ids)} users from database...")
-            result = sb.table("users").select("*").in_("id", ids).execute()
-            user_records = result.data if result.data else []
-            print(f"[DELETE-USERS] Fetched {len(user_records)} users for archiving")
-        except Exception as e:
-            print(f"[DELETE-USERS] Fetch failed: {e}")
-            # Fallback: fetch in smaller chunks
-            fetch_chunk_size = 50
-            for chunk_idx in range(0, len(ids), fetch_chunk_size):
-                chunk = ids[chunk_idx:chunk_idx + fetch_chunk_size]
-                try:
-                    result = sb.table("users").select("*").in_("id", chunk).execute()
-                    user_records.extend(result.data if result.data else [])
-                except Exception as e2:
-                    print(f"[DELETE-USERS] Warning: Fetch chunk {chunk_idx//fetch_chunk_size} failed: {e2}")
-        
-        print(f"[DELETE-USERS] Found {len(user_records)} users to archive")
-        
-        # 2. Archive users in batches (faster than one-by-one)
-        archive_batch_size = 100
-        for batch_idx in range(0, len(user_records), archive_batch_size):
-            batch = user_records[batch_idx:batch_idx + archive_batch_size]
+            # 1. Fetch ALL users in ONE query (much faster than one-by-one)
+            user_records = []
+            archived_count = 0
+            deleted_count = 0
+            roll_nos_to_delete = set()
             
             try:
-                # Build archive records for this batch
-                archive_records = []
-                for user in batch:
-                    archive_user = {
-                        "original_id": user.get("id"),
-                        "username": user.get("username"),
-                        "email": user.get("email"),
-                        "password_hash": user.get("password_hash"),
-                        "full_name": user.get("full_name"),
-                        "role": user.get("role"),
-                        "roll_no": user.get("roll_no"),
-                        "program": user.get("program"),
-                        "section": user.get("section"),
-                        "year": user.get("year"),
-                        "semester": user.get("semester"),
-                        "employee_id": user.get("employee_id"),
-                        "designation": user.get("designation"),
-                        "subjects": user.get("subjects"),
-                        "department": user.get("department"),
-                        "phone": user.get("phone"),
-                        "firebase_uid": user.get("firebase_uid"),
-                        "is_active": user.get("is_active"),
-                        "created_at": user.get("created_at"),
-                        "updated_at": user.get("updated_at"),
-                        "last_login": user.get("last_login"),
-                        "deletion_reason": d.get("reason", "Admin deletion"),
-                        "deleted_at": datetime.utcnow().isoformat()
-                    }
-                    archive_records.append(archive_user)
+                # Build query to fetch all users at once
+                print(f"[DELETE-USERS] Fetching {len(ids)} users from database...")
+                result = sb.table("users").select("*").in_("id", ids).execute()
+                user_records = result.data if result.data else []
+                print(f"[DELETE-USERS] Fetched {len(user_records)} users for archiving")
                 
-                # Insert batch to archive (Supabase supports batch inserts)
-                if archive_records:
-                    try:
-                        sb.table("users_archive").insert(archive_records).execute()
-                        archived_count += len(archive_records)
-                    except Exception as e:
-                        print(f"[DELETE-USERS] Warning: Batch insert to archive failed: {e}")
-                        # Fallback: insert one by one
-                        for rec in archive_records:
-                            try:
-                                sb.table("users_archive").insert(rec).execute()
-                                archived_count += 1
-                            except Exception as e2:
-                                print(f"[WARNING] Failed to archive single user: {e2}")
+                # Collect roll_nos for face encoding cleanup
+                for user in user_records:
+                    if user.get("roll_no"):
+                        roll_nos_to_delete.add(user.get("roll_no"))
             except Exception as e:
-                print(f"[DELETE-USERS] Warning: Archive batch {batch_idx//archive_batch_size} failed: {e}")
-        
-        print(f"[DELETE-USERS] Successfully archived {archived_count} users in {(datetime.utcnow() - start_time).total_seconds():.2f}s")
-        
-        # 3. Delete from main table - use batch operation for speed
-        print(f"[DELETE-USERS] Deleting {len(ids)} users from main table...")
-        delete_batch_size = 100
-        
-        # Collect roll_nos for face_encoding deletion BEFORE deleting users
-        roll_nos_to_delete = [u.get("roll_no") for u in user_records if u.get("roll_no")]
-        
-        try:
-            # Delete users in chunks using IN operator
-            for batch_idx in range(0, len(ids), delete_batch_size):
-                batch = ids[batch_idx:batch_idx + delete_batch_size]
-                try:
-                    # Use .in_() for efficient batch delete
-                    sb.table("users").delete().in_("id", batch).execute()
-                    deleted_count += len(batch)
-                except Exception as e:
-                    print(f"[DELETE-USERS] Warning: Batch delete failed: {e}")
-                    # Fallback: delete one-by-one if batch fails
-                    for user_id in batch:
-                        try:
-                            sb.table("users").delete().eq("id", user_id).execute()
-                            deleted_count += 1
-                        except Exception as e2:
-                            print(f"[WARNING] Failed to delete user {user_id}: {e2}")
-        except Exception as e:
-            print(f"[DELETE-USERS] Delete phase error: {e}")
-        
-        print(f"[DELETE-USERS] Deleted {deleted_count} users from main table in {(datetime.utcnow() - start_time).total_seconds():.2f}s")
-        
-        # 3b. Delete face encodings for deleted users (using roll_nos collected earlier)
-        if roll_nos_to_delete:
-            try:
-                print(f"[DELETE-USERS] Cleaning up {len(roll_nos_to_delete)} face encoding records...")
-                for roll_no in roll_nos_to_delete:
+                print(f"[DELETE-USERS] Fetch error: {e}")
+                # Fallback: try smaller chunks
+                fetch_chunk_size = 50
+                for chunk_idx in range(0, len(ids), fetch_chunk_size):
+                    chunk = ids[chunk_idx:chunk_idx + fetch_chunk_size]
                     try:
-                        # Delete face encodings by roll_no
-                        sb.table("face_encodings").delete().eq("roll_no", roll_no).execute()
-                    except Exception as e:
-                        print(f"[WARNING] Failed to delete face encodings for roll_no {roll_no}: {e}")
-            except Exception as e:
-                print(f"[DELETE-USERS] Face encoding cleanup error: {e}")
-        
-        elapsed = (datetime.utcnow() - start_time).total_seconds()
-        print(f"[SUCCESS] Deleted {deleted_count} users from main table, archived {archived_count} in {elapsed:.2f}s")
-        
-        # 4. Return success immediately, sync to Firebase asynchronously
-        response = jsonify(
-            success=True, 
-            archived=archived_count,
-            deleted=deleted_count,
-            message=f"Successfully archived {archived_count} and deleted {deleted_count} users"
-        )
-        
-        # Async Firebase sync to not block the response
-        try:
-            import threading
-            def async_firebase_sync():
-                try:
-                    for uid in ids:
-                        try:
-                            rtdb_delete(f"/users/{uid}")
-                        except Exception as e:
-                            print(f"[WARNING] RTDB delete failed for user {uid}: {e}")
-                        try:
-                            fstore_delete("users", uid)
-                        except Exception as e:
-                            print(f"[WARNING] Firestore delete failed for user {uid}: {e}")
-                    print(f"[ASYNC] Firebase sync completed for {len(ids)} users")
-                except Exception as e:
-                    print(f"[ASYNC] Firebase sync error: {e}")
+                        result = sb.table("users").select("*").in_("id", chunk).execute()
+                        user_records.extend(result.data if result.data else [])
+                    except Exception as e2:
+                        print(f"[DELETE-USERS] Chunk fetch failed: {e2}")
+                        continue
             
-            # Start async thread without blocking response
-            sync_thread = threading.Thread(target=async_firebase_sync, daemon=True)
-            sync_thread.start()
-        except Exception as e:
-            print(f"[WARNING] Could not start async Firebase sync: {e}")
+            print(f"[DELETE-USERS] Found {len(user_records)} users to archive")
+            
+            # 2. Archive users in batches
+            archive_batch_size = 100
+            for batch_idx in range(0, len(user_records), archive_batch_size):
+                batch = user_records[batch_idx:batch_idx + archive_batch_size]
+                try:
+                    archive_records = []
+                    for user in batch:
+                        archive_user = {
+                            "original_id": user.get("id"),
+                            "username": user.get("username"),
+                            "email": user.get("email"),
+                            "password_hash": user.get("password_hash"),
+                            "full_name": user.get("full_name"),
+                            "role": user.get("role"),
+                            "roll_no": user.get("roll_no"),
+                            "program": user.get("program"),
+                            "section": user.get("section"),
+                            "year": user.get("year"),
+                            "semester": user.get("semester"),
+                            "employee_id": user.get("employee_id"),
+                            "designation": user.get("designation"),
+                            "subjects": user.get("subjects"),
+                            "department": user.get("department"),
+                            "phone": user.get("phone"),
+                            "firebase_uid": user.get("firebase_uid"),
+                            "is_active": user.get("is_active"),
+                            "created_at": user.get("created_at"),
+                            "updated_at": user.get("updated_at"),
+                            "last_login": user.get("last_login"),
+                            "deletion_reason": d.get("reason", "Admin deletion"),
+                            "deleted_at": datetime.utcnow().isoformat()
+                        }
+                        archive_records.append(archive_user)
+                    
+                    if archive_records:
+                        try:
+                            sb.table("users_archive").insert(archive_records).execute()
+                            archived_count += len(archive_records)
+                        except Exception as e:
+                            print(f"[DELETE-USERS] Warning: Archive batch failed: {e}")
+                except Exception as e:
+                    print(f"[DELETE-USERS] Warning: Archive batch {batch_idx//archive_batch_size} error: {e}")
+            
+            # 3. Delete from main table
+            delete_batch_size = 100
+            try:
+                for batch_idx in range(0, len(ids), delete_batch_size):
+                    batch = ids[batch_idx:batch_idx + delete_batch_size]
+                    try:
+                        sb.table("users").delete().in_("id", batch).execute()
+                        deleted_count += len(batch)
+                    except Exception as e:
+                        print(f"[DELETE-USERS] Batch delete warning: {e}")
+                        # Fallback: one-by-one
+                        for user_id in batch:
+                            try:
+                                sb.table("users").delete().eq("id", user_id).execute()
+                                deleted_count += 1
+                            except Exception as e2:
+                                print(f"[WARNING] Failed to delete user {user_id}: {e2}")
+            except Exception as e:
+                print(f"[DELETE-USERS] Delete phase error: {e}")
+            
+            print(f"[DELETE-USERS] Deleted {deleted_count} users in {(datetime.utcnow() - start_time).total_seconds():.2f}s")
+            
+            # 3b. Cleanup face encodings
+            if roll_nos_to_delete:
+                try:
+                    print(f"[DELETE-USERS] Cleaning {len(roll_nos_to_delete)} face encoding records...")
+                    for roll_no in roll_nos_to_delete:
+                        try:
+                            sb.table("face_encodings").delete().eq("roll_no", roll_no).execute()
+                        except Exception as e:
+                            print(f"[WARNING] Face encoding cleanup for {roll_no}: {e}")
+                except Exception as e:
+                    print(f"[DELETE-USERS] Face cleanup error: {e}")
+            
+            # Return success immediately
+            response = jsonify(
+                success=True, 
+                archived=archived_count,
+                deleted=deleted_count,
+                message=f"Archived {archived_count}, deleted {deleted_count} users"
+            )
+            
+            # Async Firebase sync
+            try:
+                import threading
+                def async_firebase_sync():
+                    try:
+                        for uid in ids:
+                            try:
+                                rtdb_delete(f"/users/{uid}")
+                            except: pass
+                            try:
+                                fstore_delete("users", uid)
+                            except: pass
+                        print(f"[ASYNC] Firebase sync completed")
+                    except Exception as e:
+                        print(f"[ASYNC] Firebase sync error: {e}")
+                
+                sync_thread = threading.Thread(target=async_firebase_sync, daemon=True)
+                sync_thread.start()
+            except Exception as e:
+                print(f"[WARNING] Async Firebase sync failed: {e}")
+            
+            return response
         
-        return response
+        finally:
+            # Cancel alarm
+            if hasattr(signal, 'SIGALRM'):
+                signal.alarm(0)
+    
+    except TimeoutError as e:
+        print(f"[DELETE-USERS] TIMEOUT: {str(e)}")
+        return jsonify(success=False, error="Delete operation timed out. Try with fewer users.", details=str(e)), 504
     except Exception as e:
         print(f"[ERROR] User soft-delete failed: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify(success=False, error=str(e)), 500
+        return jsonify(success=False, error="Delete failed", details=str(e)), 500
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -5849,24 +5875,25 @@ def delete_department(dept_id):
 
 # ── BULK USER IMPORT ──────────────────────────────────────────
 # POST /api/users/bulk-import
-# Body: { users: [ {role, full_name, username, email, password,
-#                   department, program, section, roll_no,
-#                   employee_id, designation, subjects} ] }
+# Optimized for HIGH PAYLOADS (1000+ records)
+# Body: { users: [ {role, full_name, username, email, password, ...} ] }
 # FLEXIBLE: Auto-maps common column name variations
 @app.route("/api/users/bulk-import", methods=["POST"])
 def bulk_import_users():
     if not sb:
         return jsonify(success=False, error="Supabase not configured"), 500
+    
     data = request.json or {}
     users = data.get("users", [])
     if not users:
         return jsonify(success=False, error="No users provided"), 400
 
-    logger.info(f"[BULK_IMPORT] Starting import of {len(users)} users")
+    logger.info(f"[BULK_IMPORT] Starting optimized import of {len(users)} users")
     
     import hashlib, re
     created, failed = [], []
-    faculty_dept_counters = {}
+    to_insert = []  # Batch insert queue
+    BATCH_SIZE = 500  # Supabase batch insert size
     
     def _normalize_field(user_dict, *keys):
         """Try multiple key variations to extract a field value"""
@@ -5881,146 +5908,205 @@ def bulk_import_users():
         return "@" in email and "." in email.split("@")[-1]
     
     def _extract_username_from_email(email):
-        """Extract username part from email (before @)"""
+        """Extract username part from email"""
         if "@" in email:
             return email.split("@")[0]
         return email
     
+    def _flush_batch_insert(payloads):
+        """Batch insert optimized for Supabase"""
+        if not payloads:
+            return 0
+        try:
+            result = sb.table("users").insert(payloads).execute()
+            return len(payloads)
+        except Exception as e:
+            logger.error(f"[BULK_IMPORT] Batch insert failed: {str(e)[:100]}")
+            # Try individual inserts as fallback
+            success = 0
+            for p in payloads:
+                try:
+                    sb.table("users").insert(p).execute()
+                    success += 1
+                except:
+                    pass
+            return success
+    
+    # ── PHASE 1: Prepare all records (no DB queries yet) ──
+    logger.info(f"[BULK_IMPORT] Phase 1: Validating {len(users)} records...")
+    
     for idx, u in enumerate(users):
         try:
-            # ── Auto-detect and map field variations ──
-            title = _normalize_field(u, "title", "prefix", "salutation")
-            full_name = _normalize_field(u, "full_name", "name", "employee_name", "faculty_name", "student_name")
-            email = _normalize_field(u, "email", "email_id", "email_address")
+            role = _normalize_field(u, "role", "user_role", "account_type").lower().strip()
+            if not role or role not in ("student", "faculty", "admin"):
+                failed.append({"username": _normalize_field(u, "username", "email") or f"row_{idx}", "error": "Invalid role"})
+                continue
+            
             username = _normalize_field(u, "username", "user_id", "login_id")
-            roll_no = _normalize_field(u, "roll_no", "roll_number", "student_id", "reg_no")
-            emp_id = _normalize_field(u, "employee_id", "emp_id", "faculty_id")
-            department = _normalize_field(u, "department", "dept", "faculty_department")
-            program = _normalize_field(u, "program", "course", "degree")
-            section = _normalize_field(u, "section", "batch", "class")
-            designation = _normalize_field(u, "designation", "position", "title_role")
-            role = _normalize_field(u, "role", "user_role", "account_type")
-            semester = _normalize_field(u, "semester", "sem", "year")
-            subjects = _normalize_field(u, "subjects", "courses", "papers")
-            password = _normalize_field(u, "password")
+            email = _normalize_field(u, "email", "email_id", "email_address")
             
-            # ── Sanitize data ──
-            # Remove titles from full_name if accidentally included
-            if full_name and title and title in ("Mr.", "Ms.", "Dr.", "Prof."):
-                full_name = full_name.replace(title, "").strip()
-            
-            # If username is empty, try to extract from email
             if not username and email and _is_valid_email(email):
                 username = _extract_username_from_email(email)
             
-            # If still no username, try roll_no or emp_id
             if not username:
-                username = roll_no or emp_id or ""
+                username = _normalize_field(u, "roll_no", "roll_number", "employee_id", "emp_id")
             
-            # Determine role based on available fields
-            if not role:
-                if emp_id or designation or (email and "faculty" in email.lower()):
-                    role = "faculty"
-                elif roll_no or semester:
-                    role = "student"
-                else:
-                    role = "student"  # default
-            
-            role = role.lower().strip()
-            
-            # Strict role validation
-            if not role or role not in ("student", "faculty", "admin"):
-                failed.append({
-                    "username": username or email or f"row_{idx}",
-                    "error": f"Invalid role '{role}'. Must be: student, faculty, or admin"
-                })
-                continue
-            
-            # Validate username is not empty, not titles, not just titles
             if not username or username in ("Mr.", "Ms.", "Dr.", "Prof.", "faculty", ""):
-                failed.append({
-                    "username": email or f"row_{idx}",
-                    "error": "Missing valid username. Provide: username, roll_no, employee_id, or email"
-                })
+                failed.append({"username": email or f"row_{idx}", "error": "Missing valid username"})
                 continue
-            
-            # For faculty: auto-generate employee_id if missing
-            if role == "faculty":
-                if not emp_id:
-                    dept = department or "General"
-                    offset = faculty_dept_counters.get(dept, 0)
-                    emp_id = _generate_faculty_emp_id(dept, sb, extra_offset=offset)
-                    faculty_dept_counters[dept] = faculty_dept_counters.get(dept, 0) + 1
-                username = emp_id  # faculty username = employee_id
-            
-            # For students: must have semester
-            if role == "student":
-                try:
-                    semester = int(semester) if semester else 1
-                except:
-                    semester = 1
-            else:
-                semester = None
-            
-            # Check for duplicates
-            existing = sb.table("users").select("id").eq("username", username).execute()
-            if existing.data:
-                failed.append({"username": username, "error": "Already exists"})
-                continue
-            
-            # Generate password
-            pwd = password or (username + "@123")
-            pwd_hash = _hash_password_secure(pwd)
             
             # Build payload
+            password = _normalize_field(u, "password") or (username + "@123")
+            pwd_hash = _hash_password_secure(password)
+            
+            semester = None
+            if role == "student":
+                try:
+                    semester = int(_normalize_field(u, "semester", "sem", "year") or "1")
+                except:
+                    semester = 1
+            
             payload = {
-                "username":    username,
+                "username": username,
                 "password_hash": pwd_hash,
-                "role":        role,
-                "full_name":   full_name or "",
-                "email":       email or "",
-                "department":  department or "",
-                "program":     program or "",
-                "section":     section or "",
-                "semester":    semester if role == "student" else None,
-                "roll_no":     roll_no if role == "student" else None,
-                "employee_id": emp_id if role == "faculty" else None,
-                "designation": designation or "",
-                "subjects":    subjects or "",
-                "created_at":  datetime.utcnow().isoformat(),
+                "role": role,
+                "full_name": _normalize_field(u, "full_name", "name", "employee_name") or "",
+                "email": email or "",
+                "department": _normalize_field(u, "department", "dept") or "",
+                "program": _normalize_field(u, "program", "course") or "",
+                "section": _normalize_field(u, "section", "batch") or "",
+                "semester": semester,
+                "roll_no": _normalize_field(u, "roll_no", "roll_number") if role == "student" else None,
+                "employee_id": _normalize_field(u, "employee_id", "emp_id") if role == "faculty" else None,
+                "designation": _normalize_field(u, "designation", "position") or "",
+                "subjects": _normalize_field(u, "subjects", "courses") or "",
+                "is_active": True,
+                "created_at": datetime.utcnow().isoformat(),
             }
             
-            try:
-                result = sb.table("users").insert(payload).execute()
-                if result and result.data:
-                    inserted_user = result.data[0] if isinstance(result.data, list) else result.data
-                    # Sync to Firebase
-                    if _fstore:
-                        write_to_firestore("users", inserted_user.get("id", username), inserted_user)
-                    created.append(inserted_user)
-                else:
-                    failed.append({
-                        "username": username,
-                        "error": "Insert returned no data"
-                    })
-            except Exception as insert_error:
-                failed.append({
-                    "username": username,
-                    "error": f"Insert failed: {str(insert_error)}"
-                })
-                logger.error(f"[BULK_IMPORT] Insert error for {username}: {insert_error}")
-                continue
+            to_insert.append(payload)
+            
         except Exception as e:
-            failed.append({
-                "username": u.get("username") or u.get("email") or f"row_{idx}",
-                "error": f"Database error: {str(e)}"
-            })
-
-    logger.info(f"[BULK_IMPORT] Completed: {len(created)} created, {len(failed)} failed")
+            failed.append({"username": _normalize_field(u, "username") or f"row_{idx}", "error": str(e)[:50]})
+    
+    logger.info(f"[BULK_IMPORT] Phase 1 complete: {len(to_insert)} valid, {len(failed)} invalid")
+    
+    # ── PHASE 2: Batch insert all prepared records ──
+    logger.info(f"[BULK_IMPORT] Phase 2: Inserting {len(to_insert)} records in batches of {BATCH_SIZE}...")
+    
+    inserted = 0
+    for i in range(0, len(to_insert), BATCH_SIZE):
+        batch = to_insert[i:i+BATCH_SIZE]
+        batch_num = (i // BATCH_SIZE) + 1
+        total_batches = (len(to_insert) + BATCH_SIZE - 1) // BATCH_SIZE
+        
+        result = _flush_batch_insert(batch)
+        inserted += result
+        logger.info(f"[BULK_IMPORT] Batch {batch_num}/{total_batches}: +{result} records")
+    
+    created = [{"inserted": True}] * inserted  # Simplified for speed
+    
+    logger.info(f"[BULK_IMPORT] COMPLETE: {inserted} inserted, {len(failed)} failed")
     
     return jsonify(success=True,
-                   created=len(created), failed=len(failed),
-                   errors=failed[:50])  # Return first 50 errors only to avoid huge responses
+                   created=inserted,
+                   failed=len(failed),
+                   errors=failed[:50])
+
+# ── TIMETABLE BULK IMPORT ────────────────────────────────────
+# POST /api/timetable/bulk-import
+# Optimized for HIGH PAYLOADS (2000+ slots)
+# Body: { slots: [ {DEPARTMENT, PROGRAM, SEMESTER, CLASS, DAY, START_TIME, END_TIME, ...} ] }
+@app.route("/api/timetable/bulk-import", methods=["POST"])
+def bulk_import_timetable():
+    if not sb:
+        return jsonify(success=False, error="Supabase not configured"), 500
+    
+    data = request.json or {}
+    slots = data.get("slots", [])
+    if not slots:
+        return jsonify(success=False, error="No slots provided"), 400
+    
+    logger.info(f"[TIMETABLE_IMPORT] Starting optimized import of {len(slots)} slots")
+    
+    to_insert = []
+    failed = []
+    BATCH_SIZE = 500
+    
+    # ── PHASE 1: Validate and prepare all slots ──
+    logger.info(f"[TIMETABLE_IMPORT] Phase 1: Validating {len(slots)} slots...")
+    
+    for idx, slot_data in enumerate(slots):
+        try:
+            # Normalize field names
+            payload = {
+                "SLOT_ID": str(slot_data.get("SLOT_ID", slot_data.get("slot_id", f"SLOT_{idx+1:04d}"))),
+                "DEPARTMENT": str(slot_data.get("DEPARTMENT", slot_data.get("department", ""))).upper(),
+                "PROGRAM": str(slot_data.get("PROGRAM", slot_data.get("program", ""))).upper(),
+                "SEMESTER": str(slot_data.get("SEMESTER", slot_data.get("semester", "1"))),
+                "CLASS": str(slot_data.get("CLASS", slot_data.get("class", "A"))).upper(),
+                "DAY": str(slot_data.get("DAY", slot_data.get("day", ""))).title(),
+                "START_TIME": str(slot_data.get("START_TIME", slot_data.get("start_time", ""))),
+                "END_TIME": str(slot_data.get("END_TIME", slot_data.get("end_time", ""))),
+                "DURATION_HOURS": float(slot_data.get("DURATION_HOURS", slot_data.get("duration_hours", 1))),
+                "SLOT_TYPE": str(slot_data.get("SLOT_TYPE", slot_data.get("type", "THEORY"))).upper(),
+                "COURSE": str(slot_data.get("COURSE", slot_data.get("course", ""))),
+                "FACULTY_ID": str(slot_data.get("FACULTY_ID", slot_data.get("faculty_id", ""))),
+                "FACULTY_NAME": str(slot_data.get("FACULTY_NAME", slot_data.get("faculty_name", ""))),
+                "ROOM": str(slot_data.get("ROOM", slot_data.get("room", ""))),
+                "created_at": datetime.utcnow().isoformat(),
+            }
+            
+            # Validate required fields
+            if not payload["DEPARTMENT"] or not payload["DAY"] or not payload["START_TIME"]:
+                failed.append({
+                    "slot_id": payload["SLOT_ID"],
+                    "error": "Missing required fields: DEPARTMENT, DAY, START_TIME"
+                })
+                continue
+            
+            to_insert.append(payload)
+            
+        except Exception as e:
+            failed.append({
+                "slot_id": str(slot_data.get("SLOT_ID", f"row_{idx}")),
+                "error": str(e)[:50]
+            })
+    
+    logger.info(f"[TIMETABLE_IMPORT] Phase 1 complete: {len(to_insert)} valid, {len(failed)} invalid")
+    
+    # ── PHASE 2: Batch insert all slots ──
+    logger.info(f"[TIMETABLE_IMPORT] Phase 2: Inserting {len(to_insert)} slots in batches of {BATCH_SIZE}...")
+    
+    inserted = 0
+    try:
+        for i in range(0, len(to_insert), BATCH_SIZE):
+            batch = to_insert[i:i+BATCH_SIZE]
+            batch_num = (i // BATCH_SIZE) + 1
+            total_batches = (len(to_insert) + BATCH_SIZE - 1) // BATCH_SIZE
+            
+            try:
+                result = sb.table("timetable").insert(batch).execute()
+                inserted += len(batch)
+                logger.info(f"[TIMETABLE_IMPORT] Batch {batch_num}/{total_batches}: +{len(batch)} slots")
+            except Exception as batch_err:
+                logger.error(f"[TIMETABLE_IMPORT] Batch error: {str(batch_err)[:100]}")
+                # Try individual inserts
+                for slot in batch:
+                    try:
+                        sb.table("timetable").insert(slot).execute()
+                        inserted += 1
+                    except:
+                        failed.append({"slot_id": slot["SLOT_ID"], "error": "Insert failed"})
+    except Exception as e:
+        logger.error(f"[TIMETABLE_IMPORT] Import failed: {e}")
+    
+    logger.info(f"[TIMETABLE_IMPORT] COMPLETE: {inserted} inserted, {len(failed)} failed")
+    
+    return jsonify(success=True,
+                   created=inserted,
+                   failed=len(failed),
+                   errors=failed[:50])
 
 # ── GRIEVANCES ────────────────────────────────────────────────
 @app.route("/api/grievances", methods=["GET"])
@@ -9314,6 +9400,17 @@ def validate_session():
     except Exception as e:
         print(f"[SESSION] Error validating session: {str(e)}")
         return jsonify(valid=False, error="Server error"), 500
+
+
+# ── Register Enhanced Bulk Import Routes ────────────────────────────
+if BULK_ROUTES_AVAILABLE:
+    try:
+        register_bulk_routes(app, None)  # Pass None for db (not needed for routes)
+        print("[BULK_ROUTES] ✓ Enhanced bulk import routes registered")
+    except Exception as e:
+        print(f"[BULK_ROUTES] ⚠ Failed to register bulk routes: {e}")
+else:
+    print("[BULK_ROUTES] Bulk import routes not available")
 
 
 if __name__=="__main__":

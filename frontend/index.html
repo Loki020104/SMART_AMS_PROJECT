@@ -373,6 +373,7 @@ h1{font-size:2.5rem}h2{font-size:1.875rem}h3{font-size:1.5rem}h4{font-size:1.125
 .card-header .btn,
 .card-header button{width:auto;flex-shrink:0}
 .card-title{font-size:1rem;font-weight:700;font-family:'Poppins',sans-serif;}
+.card-full-width{width:100% !important;max-width:100% !important;margin:0 !important}
 .card-subtitle{font-size:.78rem;color:var(--text2);margin-top:.2rem}
 
 /* Buttons - Redesigned with rounded borders */
@@ -982,6 +983,7 @@ tbody tr:last-child td{border-bottom:none}
 @media(min-width:1440px){
   .form-row{grid-template-columns:repeat(4,1fr)}
   .card{margin:0 auto;max-width:1400px}
+  .card[style*="width:100%"]{margin:0;max-width:100%}
 }
 
 /* LANDSCAPE MODE */

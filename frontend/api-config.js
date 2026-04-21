@@ -5,7 +5,7 @@
 
 window.AMS_CONFIG = {
   // Always use deployed backend
-  API_URL: 'https://smartams-backend-ts3a5sewfq-uc.a.run.app',
+  API_URL: 'https://smartams-backend-76160313029.us-central1.run.app',
   
   // Enable debug logging (disabled in production)
   DEBUG: false,
