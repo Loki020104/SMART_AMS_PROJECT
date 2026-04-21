@@ -302,6 +302,12 @@ const NAV_CONFIG = {
     { section: 'Reports', items: [
       { id:'a-reports',    icon:'📊', label:'Global Reports' },
     ]},
+    { section: 'Analytics & Insights', items: [
+      { id:'a-analytics-overview', icon:'📊', label:'Analytics Overview' },
+      { id:'a-analytics-department', icon:'🏛️', label:'Department Analytics' },
+      { id:'a-analytics-at-risk', icon:'⚠️', label:'At-Risk Students' },
+      { id:'a-analytics-export', icon:'📥', label:'Export Analytics' },
+    ]},
   ]
 };
 
@@ -804,6 +810,7 @@ function renderModule(id){
     'a-s-attendance':renderAdminAttendance,'a-s-fees':renderAdminFees,'a-s-performance':renderAdminPerformance,
     'a-s-leave':renderAdminLeave,'a-s-placement':renderAdminPlacement,'a-s-grievance':renderAdminGrievances,
     'a-qr-dashboard':renderAdminQRDashboard,
+    'a-analytics-overview':renderAnalyticsModule,'a-analytics-department':renderAnalyticsModule,'a-analytics-at-risk':renderAnalyticsModule,'a-analytics-export':renderAnalyticsModule,
     'a-assessments':renderAssessments,
   };
   return (map[id]||renderComingSoon)(id);
@@ -826,6 +833,7 @@ function bindModuleEvents(id){
   if(id==='a-register')   initFaceRegistration();
   if(id==='a-users')      loadUserList();
   if(id==='a-qr-dashboard') initAdminQRDashboard();
+  if(id === 'a-analytics-overview' || id === 'a-analytics-department' || id === 'a-analytics-at-risk' || id === 'a-analytics-export') initAnalyticsModule();
 }
 
 // ── QR ATTENDANCE MODULES ─────────────────────────────────
@@ -1002,6 +1010,35 @@ function initAdminQRDashboard(){
   const container = document.getElementById('adminQRDashboardContainer');
   if(container && !container.querySelector('.card')) {
     loadAdminQRDashboard();
+  }
+}
+
+// ──────────────────────────────────────────────────────────
+//  ANALYTICS MODULE (Linways-like Dashboard)
+// ──────────────────────────────────────────────────────────
+
+function renderAnalyticsModule(){
+  return `<div class="card">
+    <div class="card-header">
+      <div class="card-title">📊 Analytics & Insights Dashboard</div>
+      <span class="badge badge-blue text-xs">Live</span>
+    </div>
+    <div id="a-analytics-container" style="padding: 1rem;">
+      <div class="text-muted text-sm">Loading analytics dashboard…</div>
+    </div>
+  </div>`;
+}
+
+function initAnalyticsModule(){
+  const container = document.getElementById('a-analytics-container');
+  if(!container) return;
+  
+  // Load analytics module
+  if(window.AnalyticsModule){
+    window.analyticsModule = new AnalyticsModule(window.db, window.firebase.auth());
+    window.analyticsModule.init();
+  } else {
+    container.innerHTML = '<div style="padding: 1rem; color: #dc2626;">Analytics module not loaded. Please ensure analytics_module.js is included.</div>';
   }
 }
 

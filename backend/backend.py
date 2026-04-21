@@ -118,6 +118,13 @@ try:
     BULK_ROUTES_AVAILABLE = True
 except ImportError:
     print("[WARNING] bulk_routes_enhanced module not found. Bulk import endpoints disabled.")
+
+# ── Analytics system (Linways-like) ────────────────────────────────
+try:
+    from analytics_linways import register_analytics_endpoints
+    ANALYTICS_AVAILABLE = True
+except ImportError:
+    print("[WARNING] analytics_linways module not found. Analytics endpoints disabled.")
     BULK_ROUTES_AVAILABLE = False
 
 # ── Security hardening imports ────────────────────────────────────
@@ -9411,6 +9418,16 @@ if BULK_ROUTES_AVAILABLE:
         print(f"[BULK_ROUTES] ⚠ Failed to register bulk routes: {e}")
 else:
     print("[BULK_ROUTES] Bulk import routes not available")
+
+# ── Register Analytics Endpoints (Linways-like Dashboard) ────────────
+if ANALYTICS_AVAILABLE:
+    try:
+        register_analytics_endpoints(app, db)
+        print("[ANALYTICS] ✓ Analytics dashboard endpoints registered")
+    except Exception as e:
+        print(f"[ANALYTICS] ⚠ Failed to register analytics endpoints: {e}")
+else:
+    print("[ANALYTICS] Analytics endpoints not available")
 
 
 if __name__=="__main__":
