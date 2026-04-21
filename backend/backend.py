@@ -2687,6 +2687,48 @@ def init_admin_demo():
         logger.error(f"[INIT] Admin demo init error: {e}")
         return jsonify(success=False, error=str(e)), 500
 
+def init_admin_demo2():
+    """Initialize second demo admin user for testing. One-time use."""
+    try:
+        if not sb:
+            return jsonify(success=False, error="Database not configured"), 500
+        
+        password = "SuperAdmin@456"
+        username = "superadmin"
+        
+        # Delete existing superadmin if present
+        try:
+            sb.table("users").delete().eq("username", username).execute()
+        except:
+            pass  # Ignore if user doesn't exist
+        
+        # Create new superadmin with correct hash
+        pwd_hash = _hash_password_secure(password)
+        
+        user_data = {
+            "id": str(__import__('uuid').uuid4()),
+            "username": username,
+            "email": "superadmin@smartams.demo",
+            "full_name": "Super Admin",
+            "role": "admin",
+            "password_hash": pwd_hash,
+            "is_active": True,
+            "department": "Administration",
+        }
+        
+        sb.table("users").insert(user_data).execute()
+        
+        return jsonify(
+            success=True, 
+            message="Second demo admin user created",
+            username=username,
+            password=password
+        ), 200
+    
+    except Exception as e:
+        logger.error(f"[INIT] Admin demo2 init error: {e}")
+        return jsonify(success=False, error=str(e)), 500
+
 @app.route("/api/admin/reset-password", methods=["POST"])
 def admin_reset_password():
     """Admin endpoint to reset a user's password. Can be called with username and new password."""
@@ -9686,6 +9728,82 @@ if __name__=="__main__":
         except Exception as e:
             logger.error(f"[INIT] Admin init error: {e}")
             return jsonify(error=str(e)), 500
+    
+    @app.route("/api/init-admin-demo", methods=["GET", "POST"])
+    def create_demo_admins():
+        """Create both demo admin users (admin_demo and superadmin)"""
+        try:
+            if not sb:
+                return jsonify(success=False, error="Database not configured"), 500
+            
+            results = {}
+            
+            # Create admin_demo
+            try:
+                pwd_hash_1 = _hash_password_secure("Admin@123")
+                user_data_1 = {
+                    "id": str(__import__('uuid').uuid4()),
+                    "username": "admin_demo",
+                    "email": "admin@smartams.demo",
+                    "full_name": "Demo Admin",
+                    "role": "admin",
+                    "password_hash": pwd_hash_1,
+                    "is_active": True,
+                    "department": "Administration",
+                }
+                
+                # Delete if exists
+                try:
+                    sb.table("users").delete().eq("username", "admin_demo").execute()
+                except:
+                    pass
+                
+                sb.table("users").insert(user_data_1).execute()
+                results["admin_demo"] = {
+                    "success": True,
+                    "username": "admin_demo",
+                    "password": "Admin@123",
+                    "email": "admin@smartams.demo"
+                }
+            except Exception as e:
+                results["admin_demo"] = {"success": False, "error": str(e)}
+            
+            # Create superadmin
+            try:
+                pwd_hash_2 = _hash_password_secure("SuperAdmin@456")
+                user_data_2 = {
+                    "id": str(__import__('uuid').uuid4()),
+                    "username": "superadmin",
+                    "email": "superadmin@smartams.demo",
+                    "full_name": "Super Admin",
+                    "role": "admin",
+                    "password_hash": pwd_hash_2,
+                    "is_active": True,
+                    "department": "Administration",
+                }
+                
+                # Delete if exists
+                try:
+                    sb.table("users").delete().eq("username", "superadmin").execute()
+                except:
+                    pass
+                
+                sb.table("users").insert(user_data_2).execute()
+                results["superadmin"] = {
+                    "success": True,
+                    "username": "superadmin",
+                    "password": "SuperAdmin@456",
+                    "email": "superadmin@smartams.demo"
+                }
+            except Exception as e:
+                results["superadmin"] = {"success": False, "error": str(e)}
+            
+            logger.info(f"[INIT] Demo admins created: {results}")
+            return jsonify(success=True, admins=results), 200
+            
+        except Exception as e:
+            logger.error(f"[INIT] Error creating demo admins: {e}")
+            return jsonify(success=False, error=str(e)), 500
     
     # ── Register RBAC Analytics Routes ──────────────────────────────
     if RBAC_AVAILABLE:
