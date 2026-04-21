@@ -948,48 +948,44 @@ function loadAdminQRDashboard(){
   
   (async () => {
     try {
-      const res = await fetch(`${window.AMS_CONFIG.API_URL}/api/attendance`);
+      const res = await fetch(`${window.AMS_CONFIG.API_URL}/api/attendance/dashboard`);
       if(!res.ok) throw new Error(`HTTP ${res.status}`);
       
       const data = await res.json();
-      const records = data.records || [];
       
-      // Calculate summary stats
-      const total_sessions = records.length;
-      const verified_attendance = records.filter(r => r.status === 'present' || r.status === 'verified').length;
-      const pending_attendance = records.filter(r => r.status === 'pending').length;
-      const verification_rate = total_sessions > 0 ? verified_attendance / total_sessions : 0;
-      
-      if(records.length > 0 || total_sessions > 0) {
+      if(data.summary) {
         // Show summary stats
         container.innerHTML = `<div style="padding: 1rem;">
           <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
             <div style="background: var(--ink3); padding: 1rem; border-radius: var(--radius); text-align: center;">
-              <div style="font-size: 1.5rem; font-weight: 700; color: var(--blue3);">${total_sessions}</div>
-              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Total Records</div>
+              <div style="font-size: 1.5rem; font-weight: 700; color: var(--blue3);">${data.summary.total_sessions || 0}</div>
+              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Total Sessions</div>
             </div>
             <div style="background: var(--ink3); padding: 1rem; border-radius: var(--radius); text-align: center;">
-              <div style="font-size: 1.5rem; font-weight: 700; color: var(--green2);">${verified_attendance}</div>
-              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Present</div>
+              <div style="font-size: 1.5rem; font-weight: 700; color: var(--green2);">${data.summary.verified_attendance || 0}</div>
+              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Verified</div>
             </div>
             <div style="background: var(--ink3); padding: 1rem; border-radius: var(--radius); text-align: center;">
-              <div style="font-size: 1.5rem; font-weight: 700; color: var(--orange);">${pending_attendance}</div>
+              <div style="font-size: 1.5rem; font-weight: 700; color: var(--orange);">${data.summary.pending_attendance || 0}</div>
               <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Pending</div>
             </div>
             <div style="background: var(--ink3); padding: 1rem; border-radius: var(--radius); text-align: center;">
-              <div style="font-size: 1.5rem; font-weight: 700; color: var(--teal);">${Math.round(verification_rate * 100)}%</div>
-              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Present Rate</div>
+              <div style="font-size: 1.5rem; font-weight: 700; color: var(--teal);">${Math.round((data.summary.verification_rate || 0) * 100)}%</div>
+              <div style="font-size: 0.75rem; color: var(--text2); margin-top: 0.3rem;">Verification Rate</div>
             </div>
           </div>
-          <div style="background: var(--ink2); padding: 1rem; border-radius: var(--radius); border-left: 3px solid var(--blue);">
-            <div style="font-weight: 600; margin-bottom: 0.5rem;">Attendance Overview</div>
+          ${data.today ? `<div style="background: var(--ink2); padding: 1rem; border-radius: var(--radius); border-left: 3px solid var(--blue);">
+            <div style="font-weight: 600; margin-bottom: 0.5rem;">Today's Statistics</div>
             <div style="font-size: 0.85rem; color: var(--text2);">
-              ${total_sessions} total records • ${verified_attendance} marked present • ${pending_attendance} pending
+              ${data.today.sessions || 0} sessions • ${data.today.students || 0} students marked
             </div>
-          </div>
+          </div>` : ''}
         </div>`;
+      } else if(Array.isArray(data)) {
+        // Render as table if array
+        container.innerHTML = window.renderDataTable ? window.renderDataTable(data) : JSON.stringify(data);
       } else {
-        container.innerHTML = '<div class="text-muted text-sm" style="padding:1rem">No attendance records found</div>';
+        container.innerHTML = '<div class="text-muted text-sm" style="padding:1rem">No dashboard data available</div>';
       }
     } catch(e) {
       console.error('[QR Dashboard]', e);
@@ -1025,17 +1021,17 @@ function renderStudentDashboard(){
     <div class="stat-card green"><div class="s-icon">📝</div><div class="s-val" id="sd-tasks">—</div><div class="s-lbl">Pending Tasks</div></div>
     <div class="stat-card orange"><div class="s-icon">💳</div><div class="s-val" id="sd-fees">—</div><div class="s-lbl">Fees Due</div></div>
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem">
-    <div class="card">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;width:100%;max-width:100%;box-sizing:border-box">
+    <div class="card card-full-width">
       <div class="card-header"><div class="card-title">📅 Upcoming Events</div></div>
       <div id="sd-events" class="timeline"><div class="text-muted text-sm" style="padding:1rem">Loading…</div></div>
     </div>
-    <div class="card">
+    <div class="card card-full-width">
       <div class="card-header"><div class="card-title">📊 Attendance by Subject</div></div>
       <div id="sd-attbars" class="bar-chart mt-md"><div class="text-muted text-sm" style="padding:1rem">Loading…</div></div>
     </div>
   </div>
-  <div class="card">
+  <div class="card card-full-width">
     <div class="card-header"><div class="card-title">📢 Announcements</div></div>
     <div id="sd-announcements"><div class="text-muted text-sm" style="padding:1rem">Loading…</div></div>
   </div>`;
@@ -1705,7 +1701,7 @@ async function startFaceAtt(){
   document.getElementById('faceAttSection').style.display='block';
   document.getElementById('attPanel').style.display='none';
   const body=document.getElementById('faceAttBody');
-  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading">📍</div><p class="fw-semibold">Verifying location…</p></div>`;
+  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading" style="animation:spin 1.2s linear infinite">📍</div><p class="fw-semibold">Verifying location…</p></div>`;
   try{
     const loc=await getLocation();
     const inCampus=isInCollege(loc.lat,loc.lng);
@@ -1745,7 +1741,7 @@ async function captureFaceAtt(){
   const loadingOverlay = document.createElement('div');
   loadingOverlay.id = 'captureLoadingOverlay';
   loadingOverlay.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:100;border-radius:inherit';
-  loadingOverlay.innerHTML = `<div style="text-align:center;color:white"><div style="font-size:24px">🔍</div><p style="margin-top:0.5rem">Capturing face…</p></div>`;
+  loadingOverlay.innerHTML = `<div style="text-align:center;color:white"><div style="font-size:24px;animation:spin 1.2s linear infinite">🔍</div><p style="margin-top:0.5rem">Capturing face…</p></div>`;
   cameraWrap.appendChild(loadingOverlay);
   
   // Wait longer for video to fully settle and render (1.5 seconds)
@@ -1796,7 +1792,7 @@ async function captureFaceAtt(){
   AMS.lastCapturedImage = imageData;
   
   // Now verify the captured face against stored encodings
-  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading">🔍</div><p class="fw-semibold">Verifying face…</p></div>`;
+  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading" style="animation:spin 1.2s linear infinite">🔍</div><p class="fw-semibold">Verifying face…</p></div>`;
   const result=await verifyFace(imageData);
 
   if(result.verified){
@@ -1955,7 +1951,7 @@ async function processQRAttendance(qrData){
   _qrSession.subject='Class Session';
 
   const body=document.getElementById('qrScanBody');
-  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading">📍</div><p>Getting your location…</p></div>`;
+  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading" style="animation:spin 1.2s linear infinite">📍</div><p>Getting your location…</p></div>`;
   try{
     // 1. Check attendance window first
     if(!isWithinAttendanceWindow()){
@@ -2018,7 +2014,7 @@ async function processQRAttendance(qrData){
 
 async function captureQRFace(){
   const body=document.getElementById('qrScanBody');
-  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading">🔍</div><p>Capturing face…</p></div>`;
+  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading" style="animation:spin 1.2s linear infinite">🔍</div><p>Capturing face…</p></div>`;
 
   await new Promise(r=>setTimeout(r,1500));
 
@@ -2044,7 +2040,7 @@ async function captureQRFace(){
     return;
   }
 
-  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading">🔍</div><p>Verifying face &amp; submitting attendance…</p></div>`;
+  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading" style="animation:spin 1.2s linear infinite">🔍</div><p>Verifying face &amp; submitting attendance…</p></div>`;
 
   try{
     const resp=await fetch(`${window.AMS_CONFIG.API_URL}/api/qr/mark-attendance`,{
@@ -2641,12 +2637,12 @@ function renderFacultyDashboard(){
     <div class="stat-card teal"><div class="s-icon">📊</div><div class="s-val" id="fd-attendance">—</div><div class="s-lbl">Avg Attendance</div></div>
     <div class="stat-card orange"><div class="s-icon">⏰</div><div class="s-val" id="fd-tasks">—</div><div class="s-lbl">Pending Tasks</div></div>
   </div>
-  <div style="display:grid;grid-template-columns:2fr 1fr;gap:1.25rem;margin-bottom:1.25rem">
-    <div class="card">
+  <div style="display:grid;grid-template-columns:2fr 1fr;gap:1.25rem;margin-bottom:1.25rem;width:100%;max-width:100%;box-sizing:border-box">
+    <div class="card card-full-width">
       <div class="card-header"><div class="card-title">📋 Today's Schedule</div></div>
       <div id="fd-schedule"><div class="text-muted text-sm p-md">Loading…</div></div>
     </div>
-    <div class="card">
+    <div class="card card-full-width">
       <div class="card-header"><div class="card-title">⚡ Quick Actions</div></div>
       <div style="display:flex;flex-direction:column;gap:.5rem">
         <button class="btn btn-primary w-full" onclick="loadModule('f-attendance','Attendance Marking')">✅ Mark Attendance</button>
@@ -2656,7 +2652,7 @@ function renderFacultyDashboard(){
       </div>
     </div>
   </div>
-  <div class="card">
+  <div class="card card-full-width">
     <div class="card-header">
       <div class="card-title">📚 My Assigned Courses</div>
       <span class="badge badge-blue text-xs" style="cursor:pointer" onclick="fdLoadMyCourses()">🔄 Refresh</span>
@@ -6057,21 +6053,21 @@ function renderBulkEnrollment(id){
 // ═══════════════════════════════════════════════════════════════════════════════
 function renderAdminDashboard(){
   setTimeout(()=>loadAdminDashboardData(),100);
-  return `
+  return `<div style="width:100%;max-width:100%;box-sizing:border-box">
   <div class="stats-grid">
     <div class="stat-card blue"><div class="s-icon">👨‍🎓</div><div class="s-val" id="ad-students">—</div><div class="s-lbl">Total Students</div></div>
     <div class="stat-card green"><div class="s-icon">👩‍🏫</div><div class="s-val" id="ad-faculty">—</div><div class="s-lbl">Faculty Members</div></div>
     <div class="stat-card teal"><div class="s-icon">📊</div><div class="s-val" id="adminAvgAtt">—</div><div class="s-lbl">Today's Attendance</div></div>
     <div class="stat-card orange"><div class="s-icon">🎓</div><div class="s-val" id="ad-courses">—</div><div class="s-lbl">Active Courses</div></div>
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-bottom:1.5rem">
-    <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem;backdrop-filter:blur(10px);min-height:450px;display:flex;flex-direction:column">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem"><div style="font-size:1rem;font-weight:700">📊 Today's Attendance Rate</div></div>
-      <div id="ad-attchart" style="flex:1;display:flex;align-items:center;justify-content:center"><div style="color:var(--text2);font-size:0.875rem;padding:0.5rem">Loading…</div></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;width:100%;max-width:100%;box-sizing:border-box">
+    <div class="card card-full-width">
+      <div class="card-header"><div class="card-title">📊 Today's Attendance Rate</div></div>
+      <div id="ad-attchart" class="bar-chart mt-md" style="width:100%;box-sizing:border-box"><div class="text-muted text-sm" style="padding:.5rem">Loading…</div></div>
     </div>
-    <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem;backdrop-filter:blur(10px);min-height:450px;display:flex;flex-direction:column">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem"><div style="font-size:1rem;font-weight:700">⚡ Admin Actions</div></div>
-      <div style="display:flex;flex-direction:column;gap:0.5rem;flex:1;overflow-y:auto">
+    <div class="card card-full-width">
+      <div class="card-header"><div class="card-title">⚡ Admin Actions</div></div>
+      <div style="display:flex;flex-direction:column;gap:.5rem;width:100%;box-sizing:border-box">
         <button class="btn btn-primary w-full" onclick="loadModule('a-users','User Management')">👥 Add New User</button>
         <button class="btn btn-teal w-full" onclick="loadModule('a-register','Face Registration')">👤 Register Student Face</button>
         <button class="btn btn-outline w-full" onclick="loadModule('a-logs','Audit Logs')">📋 View Audit Logs</button>
@@ -6082,9 +6078,10 @@ function renderAdminDashboard(){
       </div>
     </div>
   </div>
-  <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem;backdrop-filter:blur(10px);margin-bottom:1.25rem">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.25rem"><div style="font-size:1rem;font-weight:700">📢 Recent Activity (Live)</div></div>
-    <div id="ad-activity" style="color:var(--text2);font-size:0.875rem;padding:1rem">Loading…</div>
+  <div class="card card-full-width">
+    <div class="card-header"><div class="card-title">📢 Recent Activity (Live)</div></div>
+    <div id="ad-activity" style="width:100%;box-sizing:border-box"><div class="text-muted text-sm" style="padding:1rem">Loading…</div></div>
+  </div>
   </div>`;
 }
 
@@ -6156,22 +6153,13 @@ async function loadAdminDashboardData(){
     // Attendance fallback when RTDB is unavailable or empty
     const attEl=document.getElementById('adminAvgAtt');
     if(attEl && (attEl.textContent==='—' || attEl.textContent==='0%')){
-      const attRes=await fetch(`${window.AMS_CONFIG.API_URL}/api/attendance`).catch(()=>null);
+      const attRes=await fetch(`${window.AMS_CONFIG.API_URL}/api/attendance?date=${today}`).catch(()=>null);
       if(attRes&&attRes.ok){
         const a=await attRes.json();
         const records=a.records||[];
         const present=records.filter(r=>((r.status||'').toLowerCase()==='present') || (r.status||'').toLowerCase()==='late').length;
         const pct=records.length?Math.round((present/records.length)*100):0;
         attEl.textContent=pct+'%';
-        const chart=document.getElementById('ad-attchart');
-        if(chart){
-          chart.innerHTML=`<div class="bar-row">
-            <div class="bar-label text-xs">Present</div>
-            <div class="bar-fill"><div class="bar-inner" style="width:${pct}%;background:linear-gradient(90deg,var(--blue),var(--teal))"></div></div>
-            <div class="bar-val text-xs">${present}/${records.length}</div>
-          </div>
-          <p class="text-muted text-sm" style="margin-top:.5rem">Attendance count — ${pct}% present.</p>`;
-        }
       }
     }
   }catch(e){ console.error('[Admin Dashboard]',e); }
@@ -6883,7 +6871,7 @@ async function ttLoadGrid(){
   </div>
   <div style="display:flex;gap:.25rem;margin-top:.3rem">
     <button class="btn btn-outline btn-sm" style="padding:1px 5px;font-size:.7rem" onclick="ttOpenSlotModal('${c.id}')">✏️</button>
-    <button class="btn btn-danger btn-sm" style="padding:1px 3px;font-size:.65rem" onclick="ttDeleteSlot('${c.id}')">🗑️</button>
+    <button class="btn btn-danger btn-sm" style="padding:1px 5px;font-size:.7rem" onclick="ttDeleteSlot('${c.id}')">🗑️</button>
     <button class="btn btn-outline btn-sm" style="padding:1px 5px;font-size:.7rem" onclick="ttOpenSubModal('${c.id}','${(c.faculty_name||'').replace(/'/g,'\\\'')}')" title="Assign substitute">🔄</button>
   </div>
 </div>`;
@@ -7316,7 +7304,7 @@ ${entries.map(e=>`<tr>
   <td style="border:1px solid var(--border);padding:.35rem .5rem">
     <div style="display:flex;gap:.25rem">
       <button class="btn btn-outline btn-sm" style="padding:2px 5px;font-size:.72rem" onclick="ttOpenSlotModal('${e.id}')">✏️</button>
-      <button class="btn btn-danger btn-sm"  style="padding:1px 3px;font-size:.65rem" onclick="ttDeleteSlot('${e.id}')">🗑️</button>
+      <button class="btn btn-danger btn-sm"  style="padding:2px 5px;font-size:.72rem" onclick="ttDeleteSlot('${e.id}')">🗑️</button>
       <button class="btn btn-outline btn-sm" style="padding:2px 5px;font-size:.72rem" onclick="ttOpenSubModal('${e.id}','${(e.faculty_name||'').replace(/'/g,'\\\'')}')" title="Substitute">🔄</button>
     </div>
   </td>
@@ -8231,14 +8219,13 @@ function renderUserManagement(){
   window._umSelected = new Set();
   return `
   <!-- Tab bar -->
-  <div class="card" style="padding:.75rem 1rem">
+  <div class="card" style="padding:.5rem 1rem">
     <div class="d-flex gap-md" style="flex-wrap:wrap">
-      <button class="btn-gradient-border btn-gradient-border-default" onclick="setUMTab('list')" id="umTabList">➕ Add User</button>
-      <button class="btn-gradient-border btn-gradient-border-default" onclick="setUMTab('add')" id="umTabAdd">➕ Add User</button>
-      <button class="btn-gradient-border btn-gradient-border-default" onclick="setUMTab('bulk')" id="umTabBulk">📥 Bulk Import</button>
-      <button class="btn-gradient-border btn-gradient-border-default" onclick="setUMTab('assign')" id="umTabAssign">📚 Assign Subjects</button>
-      <button class="btn-gradient-border btn-gradient-border-delete" onclick="setUMTab('delete')" id="umTabDelete">🗑️ Delete Users</button>
-      <button class="btn-gradient-border btn-gradient-border-archive" onclick="setUMTab('archive');loadArchiveUsers()" id="umTabArchive">📦 Archive</button>
+      <button class="btn btn-primary btn-sm" onclick="setUMTab('list')" id="umTabList">👥 All Users</button>
+      <button class="btn btn-outline btn-sm" onclick="setUMTab('add')" id="umTabAdd">➕ Add User</button>
+      <button class="btn btn-outline btn-sm" onclick="setUMTab('bulk')" id="umTabBulk">📥 Bulk Import</button>
+      <button class="btn btn-outline btn-sm" onclick="setUMTab('assign')" id="umTabAssign">📚 Assign Subjects</button>
+      <button class="btn btn-outline btn-sm" style="border-color:#9333ea;color:#9333ea" onclick="setUMTab('archive');loadArchiveUsers()" id="umTabArchive">📦 Archive</button>
     </div>
   </div>
 
@@ -8264,10 +8251,11 @@ function renderUserManagement(){
         <button class="btn btn-sm" title="Remove duplicate roll numbers" onclick="fixDuplicateRolls()" style="white-space:nowrap;flex:0;padding:.5rem .9rem;font-size:.9rem;font-weight:600;background:#f59e0b;color:#fff;border:none;cursor:pointer;border-radius:var(--radius-sm);display:inline-flex;align-items:center;gap:.4rem;transition:all .2s ease">🧹 Duplicates</button>
       </div>
     </div>
-    <div id="umBulkBar" style="display:none;padding:1rem;background:rgba(239,68,68,.08);border-bottom:2px solid #ef4444;flex-direction:row;align-items:center;gap:1rem;flex-wrap:wrap;border-radius:8px;margin-bottom:1rem;display:flex">
-      <span id="umBulkCount" style="font-size:.9rem;font-weight:600;color:#ef4444">0 selected</span>
-      <button class="btn btn-danger btn-sm" onclick="umDeleteSelected()">🗑️ Delete Selected</button>
-      <button class="btn btn-outline btn-sm" onclick="umClearSelection()">✕ Clear</button>
+    <div id="umBulkBar" style="display:none;padding:.6rem 1rem;background:#fef2f2;border-bottom:2px solid #fca5a5;flex-direction:row;align-items:center;gap:1rem;flex-wrap:wrap">
+      <span id="umBulkCount" style="font-size:.85rem;font-weight:700;color:#991b1b;white-space:nowrap;flex:0">0 selected</span>
+      <button class="btn btn-sm" style="background:#3b82f6;color:#fff;border:none;cursor:pointer;padding:.5rem .9rem;border-radius:var(--radius-sm);font-weight:600;font-size:.9rem;white-space:nowrap;flex:0;display:inline-flex;align-items:center;gap:.4rem;transition:all .2s ease;box-shadow:0 2px 4px rgba(0,0,0,0.1)" onmouseover="this.style.background='#2563eb'" onmouseout="this.style.background='#3b82f6'" onclick="umArchiveSelected()">📦 Archive</button>
+      <button class="btn btn-sm" style="background:#ef4444;color:#fff;border:none;cursor:pointer;padding:.5rem .9rem;border-radius:var(--radius-sm);font-weight:600;font-size:.9rem;white-space:nowrap;flex:0;display:inline-flex;align-items:center;gap:.4rem;transition:all .2s ease;box-shadow:0 2px 4px rgba(0,0,0,0.1)" onmouseover="this.style.background='#dc2626'" onmouseout="this.style.background='#ef4444'" onclick="umDeleteSelected()">🗑️ Delete</button>
+      <button class="btn btn-outline btn-sm" style="cursor:pointer;padding:.5rem .9rem;font-size:.9rem;white-space:nowrap;flex:0;border:2px solid #999;background:#fff;color:#333;border-radius:var(--radius-sm);font-weight:600;display:inline-flex;align-items:center;gap:.4rem;transition:all .2s ease" onmouseover="this.style.background='#f3f4f6'" onmouseout="this.style.background='#fff'" onclick="umClearSelection()">✕ Clear</button>
     </div>
     <div class="tbl-wrap" style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--border);border-radius:var(--radius-sm)">
       <table style="min-width:100%;width:100%">
@@ -8276,20 +8264,19 @@ function renderUserManagement(){
           <th style="padding:.5rem;min-width:90px;font-size:.9rem">ID / Roll</th>
           <th style="padding:.5rem;min-width:120px;font-size:.9rem">Name</th>
           <th style="padding:.5rem;min-width:70px;font-size:.9rem">Role</th>
+          <th style="padding:.5rem;min-width:140px;font-size:.9rem">Dept / Info</th>
           <th style="padding:.5rem;min-width:150px;font-size:.9rem">Email</th>
           <th style="padding:.5rem;min-width:70px;font-size:.9rem">Status</th>
           <th style="padding:.5rem;min-width:100px;font-size:.9rem">Actions</th>
         </tr></thead>
-        <tbody id="userTableBody"><tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text3)">Loading users…</td></tr></tbody>
+        <tbody id="userTableBody"><tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text3)">Loading users…</td></tr></tbody>
       </table></div>
-    <div id="umPaginationBar" style="padding:1rem;display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;border-top:1px solid var(--border);margin-top:1rem">
-      <span id="umPageInfo" style="font-size:.85rem;color:var(--text2)">Page 1 of 1</span>
-      <div style="display:flex;gap:.5rem">
-        <button class="btn btn-outline btn-sm" id="umPrevBtn" onclick="umPreviousPage()" disabled>← Previous</button>
-        <button class="btn btn-outline btn-sm" id="umNextBtn" onclick="umNextPage()" disabled>Next →</button>
+      <div id="userPaginationControls" style="padding:1rem;border-top:1px solid var(--border);display:flex;justify-content:center;gap:1rem;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-outline btn-sm" onclick="umSelectAllPages()" style="background:#4f46e5;color:#fff;border:none;padding:.5rem .9rem;border-radius:var(--radius-sm);font-weight:600">📌 Select All Across Pages</button>
+        <button class="btn btn-outline btn-sm" id="umPrevBtn" onclick="umPreviousPage()" style="display:none">← Previous</button>
+        <span id="umPageInfo" style="font-size:.9rem;color:var(--text2);min-width:150px;text-align:center">Page 1</span>
+        <button class="btn btn-outline btn-sm" id="umNextBtn" onclick="umNextPage()" style="display:none">Next →</button>
       </div>
-      <span id="umUserCount" style="font-size:.85rem;color:var(--text2)">0 users total</span>
-    </div>
   </div>
 
   <!-- Add User Tab -->
@@ -8418,10 +8405,15 @@ function renderUserManagement(){
         <button class="btn btn-outline btn-sm mt-sm" onclick="downloadCSVTemplate()">⬇ Download Template</button>
       </div>
       <div id="bulkPreviewWrap" style="display:none">
-        <div class="tbl-wrap" style="margin-bottom:1rem"><table>
-          <thead><tr><th>#</th><th>Role</th><th>Name</th><th>Username</th><th>Dept</th><th>Program</th><th>Section</th></tr></thead>
+        <div class="tbl-wrap" style="margin-bottom:1rem;overflow-x:auto"><table style="min-width:1400px">
+          <thead><tr><th>#</th><th>Role</th><th>Name</th><th>Username</th><th>Email</th><th>Password</th><th>Dept</th><th>Program</th><th>Section</th><th>Roll No</th><th>Emp ID</th><th>Designation</th><th>Subjects</th></tr></thead>
           <tbody id="bulkPreviewBody"></tbody>
         </table></div>
+        <div id="bulkPreviewPaginationControls" style="display:none;padding:1rem;border-top:1px solid var(--border);display:flex;justify-content:center;gap:1rem;align-items:center;margin-bottom:1rem">
+          <button class="btn btn-outline btn-sm" id="bulkPrevBtn" onclick="bulkPreviewPreviousPage()" style="display:none">← Previous</button>
+          <span id="bulkPageInfo" style="font-size:.9rem;color:var(--text2);min-width:150px;text-align:center">Page 1</span>
+          <button class="btn btn-outline btn-sm" id="bulkNextBtn" onclick="bulkPreviewNextPage()" style="display:none">Next →</button>
+        </div>
         <div class="d-flex gap-md">
           <button class="btn btn-primary" style="flex:1" onclick="submitBulkImport()">📥 Import All</button>
           <button class="btn btn-outline" onclick="clearBulkPreview()">✕ Clear</button>
@@ -8444,42 +8436,6 @@ function renderUserManagement(){
   </div>
 
     <!-- Delete Users Tab Panel -->
-    <div id="umTabDeletePanel" class="card" style="display:none;border:2px solid #fca5a5">
-      <div class="card-header" style="background:#fef2f2;border-bottom:1px solid #fca5a5">
-        <div class="card-title" style="color:#dc2626">🗑️ Delete Users</div>
-        <span style="font-size:.83rem;color:#991b1b">Permanently delete users from Supabase, RTDB &amp; Firestore.</span>
-      </div>
-      <div style="padding:.75rem 1rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;border-bottom:1px solid var(--border)">
-        <select id="umDelRole" style="padding:.35rem .7rem;border:1px solid var(--border);background:var(--ink3);color:var(--text);border-radius:var(--radius-sm)">
-          <option value="">All Roles</option>
-          <option value="student">Students</option>
-          <option value="faculty">Faculty</option>
-          <option value="admin">Admins</option>
-        </select>
-        <select id="umDelDept" style="padding:.35rem .7rem;border:1px solid var(--border);background:var(--ink3);color:var(--text);border-radius:var(--radius-sm);min-width:160px">
-          <option value="">All Departments</option>
-        </select>
-        <select id="umDelSem" style="padding:.35rem .7rem;border:1px solid var(--border);background:var(--ink3);color:var(--text);border-radius:var(--radius-sm)">
-          <option value="">All Semesters</option>
-          <option value="1">Sem 1</option><option value="2">Sem 2</option><option value="3">Sem 3</option>
-          <option value="4">Sem 4</option><option value="5">Sem 5</option><option value="6">Sem 6</option>
-          <option value="7">Sem 7</option><option value="8">Sem 8</option>
-        </select>
-        <button class="btn btn-outline btn-sm" onclick="umLoadDeleteTab()">🔍 Filter</button>
-      </div>
-      <div style="padding:.75rem 1rem;border-bottom:1px solid var(--border);display:flex;gap:.75rem;align-items:center;flex-wrap:wrap">
-        <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;font-weight:600">
-          <input type="checkbox" id="umDelSelectAll" onchange="umDelToggleAll(this.checked)" style="width:1rem;height:1rem"/>
-          Select All
-        </label>
-        <span id="umDelSelCount" style="font-size:.85rem;color:var(--text2)">0 selected</span>
-        <button class="btn btn-sm" style="background:#ef4444;color:#fff;border:none;display:none" id="umDelDeleteBtn" onclick="umDelDeleteSelected()">🗑️ Delete Selected</button>
-      </div>
-      <div id="umDelUserList" style="padding:.75rem 1rem;max-height:420px;overflow-y:auto">
-        <p style="color:var(--text3);text-align:center;padding:2rem">Use the filters above and click Filter to load users.</p>
-      </div>
-    </div>
-
   <!-- Archive Tab -->
   <div id="umTabArchivePanel" class="card" style="display:none;border:2px solid #9333ea">
     <div class="card-header" style="background:#fef3f2;border-bottom:1px solid #d4a5f7">
@@ -8521,7 +8477,7 @@ function renderUserManagement(){
 }
 
 function setUMTab(tab){
-  ['list','add','bulk','assign','delete','archive'].forEach(t=>{
+  ['list','add','bulk','assign','archive'].forEach(t=>{
     const panel = document.getElementById(`umTab${t.charAt(0).toUpperCase()+t.slice(1)}Panel`);
     if(panel) panel.style.display = t===tab?'block':'none';
     const btn = document.getElementById(`umTab${t.charAt(0).toUpperCase()+t.slice(1)}`);
@@ -8533,97 +8489,7 @@ function setUMTab(tab){
   });
   if(tab==='list') loadUserList();
   if(tab==='assign') loadAssignTable();
-  if(tab==='delete'){ umLoadDeleteTab(); populateDeptDropdowns(); }
   if(tab==='archive') loadArchiveUsers();
-}
-
-// ─ Delete Users Tab Functions ─────────────────────────────────────
-async function umLoadDeleteTab(){
-  const role = document.getElementById('umDelRole')?.value||'';
-  const dept = document.getElementById('umDelDept')?.value||'';
-  const sem = document.getElementById('umDelSem')?.value||'';
-  let url = `${window.AMS_CONFIG.API_URL}/api/users/list`;
-  const params = [];
-  if(role) params.push(`role=${encodeURIComponent(role)}`);
-  if(dept) params.push(`department=${encodeURIComponent(dept)}`);
-  if(sem) params.push(`semester=${encodeURIComponent(sem)}`);
-  if(params.length) url += '?' + params.join('&');
-  try{
-    const resp = await fetch(url);
-    if(!resp.ok) throw new Error('Failed to load');
-    const data = await resp.json();
-    const users = data.users||[];
-    const listDiv = document.getElementById('umDelUserList');
-    if(!users.length){
-      listDiv.innerHTML='<p style="color:var(--text3);text-align:center;padding:2rem">No users found with selected filters.</p>';
-      document.getElementById('umDelSelectAll').checked=false;
-      window._umDelSelected = new Set();
-      umDelUpdateCount();
-      return;
-    }
-    window._umDelUserMap = {};
-    users.forEach(u=>{ window._umDelUserMap[u.id]=u; });
-    listDiv.innerHTML = users.map(u=>{
-      const idLabel = u.role==='student'?(u.roll_no||u.username):(u.role==='faculty'?(u.employee_id||u.username):u.username);
-      return `<div style="display:flex;gap:.5rem;align-items:center;padding:.6rem;border-bottom:1px solid var(--border)">
-        <input type="checkbox" class="um-del-chk" data-id="${u.id}" onchange="umDelUpdateCount()" style="width:1rem;height:1rem"/>
-        <div style="flex:1">
-          <div style="font-weight:600;font-size:.9rem">${idLabel} · ${u.full_name||u.username}</div>
-          <div style="font-size:.8rem;color:var(--text2)">${u.role} · ${u.department||'—'}</div>
-        </div>
-      </div>`;
-    }).join('');
-    document.getElementById('umDelSelectAll').checked=false;
-    window._umDelSelected = new Set();
-    umDelUpdateCount();
-  }catch(e){
-    document.getElementById('umDelUserList').innerHTML=`<p style="color:var(--red);text-align:center;padding:2rem">Failed to load users</p>`;
-  }
-}
-
-function umDelToggleAll(checked){
-  document.querySelectorAll('.um-del-chk').forEach(c=>{ c.checked=checked; });
-  window._umDelSelected = new Set();
-  if(checked){
-    document.querySelectorAll('.um-del-chk').forEach(c=>{ window._umDelSelected.add(c.dataset.id); });
-  }
-  umDelUpdateCount();
-}
-
-function umDelUpdateCount(){
-  window._umDelSelected = new Set();
-  document.querySelectorAll('.um-del-chk:checked').forEach(c=>{ window._umDelSelected.add(c.dataset.id); });
-  const count = window._umDelSelected.size;
-  const countSpan = document.getElementById('umDelSelCount');
-  const delBtn = document.getElementById('umDelDeleteBtn');
-  countSpan.textContent = count===0?'0 selected':`${count} selected`;
-  if(delBtn) delBtn.style.display = count>0?'block':'none';
-  const allChk = document.getElementById('umDelSelectAll');
-  const total = document.querySelectorAll('.um-del-chk').length;
-  if(allChk){ allChk.checked = count>0&&count===total; }
-}
-
-async function umDelDeleteSelected(){
-  if(!window._umDelSelected||window._umDelSelected.size===0){ toast('No users selected','warning'); return; }
-  const idArray = Array.from(window._umDelSelected);
-  if(!confirm(`Delete ${idArray.length} user(s)? This cannot be undone!`)) return;
-  try{
-    const resp = await fetch(`${window.AMS_CONFIG.API_URL}/api/users/delete-bulk`, {
-      method:'DELETE',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({user_ids:idArray})
-    });
-    const data = await resp.json();
-    if(resp.ok){
-      toast(`✅ Deleted ${idArray.length} user(s)`,'success');
-      window._umDelSelected.clear();
-      umLoadDeleteTab();
-    }else{
-      toast(data.error||'Delete failed','error');
-    }
-  }catch(e){
-    toast('Delete failed: '+e.message,'error');
-  }
 }
 
 // ─ All Users Tab Checkbox Functions ───────────────────────────────
@@ -8637,24 +8503,58 @@ function umToggleSelectAll(checked){
 }
 
 function umUpdateBulkBar(){
-  window._umSelected = new Set();
-  document.querySelectorAll('.um-row-chk:checked').forEach(c=>{ window._umSelected.add(c.dataset.id); });
+  // Merge checked boxes from current page into persistent selection set
+  if(!window._umPersistentSelected) window._umPersistentSelected = new Set();
+  
+  // Add checked items
+  document.querySelectorAll('.um-row-chk:checked').forEach(c=>{ 
+    window._umPersistentSelected.add(c.dataset.id); 
+  });
+  
+  // Remove unchecked items
+  document.querySelectorAll('.um-row-chk:not(:checked)').forEach(c=>{ 
+    window._umPersistentSelected.delete(c.dataset.id); 
+  });
+  
+  window._umSelected = window._umPersistentSelected;
   const count = window._umSelected.size;
   const bar = document.getElementById('umBulkBar');
   if(!bar) return;
   bar.style.display = count>0?'flex':'none';
   const countSpan = document.getElementById('umBulkCount');
-  if(countSpan) countSpan.textContent = `${count} selected`;
+  if(countSpan) countSpan.textContent = `${count} selected (across ${count>0?'all pages':0})`;
+  
+  // Update select-all checkbox for current page
   const allChk = document.getElementById('umSelAll');
   const total = document.querySelectorAll('.um-row-chk').length;
-  if(allChk){ allChk.checked = count>0&&count===total; allChk.indeterminate = count>0&&count<total; }
-  console.log('[umUpdateBulkBar] Count:', count, 'Display:', bar.style.display);
+  if(allChk){ allChk.checked = total>0 && count===total && total===window._umAllUsers.length; allChk.indeterminate = count>0&&count<window._umAllUsers.length; }
+  console.log('[umUpdateBulkBar] Total persistent selected:', count, 'on current page:', window._umSelected.size);
 }
 
 function umClearSelection(){
   document.querySelectorAll('.um-row-chk').forEach(c=>{ c.checked=false; });
+  if(!window._umPersistentSelected) window._umPersistentSelected = new Set();
+  window._umPersistentSelected.clear();
   window._umSelected.clear();
   umUpdateBulkBar();
+}
+
+function umSelectAllPages(){
+  // Select ALL users across ALL pages
+  if(!window._umPersistentSelected) window._umPersistentSelected = new Set();
+  if(!window._umAllUsers) { toast('Loading users first...', 'info'); return; }
+  
+  window._umAllUsers.forEach(u => {
+    if(u.id) window._umPersistentSelected.add(u.id);
+  });
+  
+  // Update checkboxes on current page
+  document.querySelectorAll('.um-row-chk').forEach(c=>{ 
+    c.checked = window._umPersistentSelected.has(c.dataset.id);
+  });
+  
+  umUpdateBulkBar();
+  toast(`✅ Selected all ${window._umPersistentSelected.size} users across all pages`, 'success');
 }
 
 async function umDeleteSelected(){
@@ -8682,8 +8582,8 @@ async function _umDeleteSelectedAsync(){
   toast('⏳ Starting bulk deletion...', 'info');
   
   try{
-    const batchSize = 150; // Increased from 50 to 150 for better throughput
-    const parallelBatches = 3; // Process 3 batches in parallel
+    const batchSize = 300; // Increased from 150 to 300 for massive bulk deletes
+    const parallelBatches = 4; // Process 4 batches in parallel for faster throughput
     let totalDeleted = 0;
     let totalArchived = 0;
     let failedBatches = 0;
@@ -8711,8 +8611,8 @@ async function _umDeleteSelectedAsync(){
           
           try{
             const controller = new AbortController();
-            // Very long timeout for backend (may include Firebase sync): 3 minutes
-            const timeout = setTimeout(() => controller.abort(), 180000);
+            // Extended timeout for backend: 5 minutes for massive bulk deletes
+            const timeout = setTimeout(() => controller.abort(), 300000);
             
             const deleteUrl = `${window.AMS_CONFIG.API_URL}/api/users/delete-bulk`;
             console.log(`[DELETE-BULK] Batch ${batchNum} requesting:`, {url: deleteUrl, userCount: batch.length});
@@ -9300,32 +9200,115 @@ function previewBulkCSV(){
       const vals = _parseCSVLine(line);
       const obj = {};
       header.forEach((h,i)=>{ obj[h] = (vals[i]||'').trim(); });
-      // auto-fill username from roll_no for students if missing
-      if(!obj.username && obj.roll_no) obj.username = obj.roll_no;
-      // for faculty, username must match employee_id
-      if(obj.role === 'faculty' && obj.employee_id) obj.username = obj.employee_id;
-      // auto-fill email if missing
-      if(!obj.email && obj.username) obj.email = obj.username+'@ams.edu';
+      
+      // ── AUTO-DETECT ROLE ──
+      // If role is explicitly provided, use it
+      if(obj.role && obj.role.toLowerCase()) {
+        obj.role = obj.role.toLowerCase();
+      } else {
+        // Auto-detect based on available fields
+        if(obj.employee_id || obj.designation) {
+          obj.role = 'faculty';
+        } else if(obj.roll_no || obj.semester) {
+          obj.role = 'student';
+        } else {
+          obj.role = 'student'; // default
+        }
+      }
+      
+      // ── AUTO-FILL USERNAME ──
+      if(!obj.username) {
+        if(obj.employee_id) {
+          obj.username = obj.employee_id; // Faculty: use employee_id as username
+        } else if(obj.roll_no) {
+          obj.username = obj.roll_no; // Student: use roll_no as username
+        }
+      }
+      
+      // ── AUTO-FILL EMAIL ──
+      if(!obj.email && obj.username) {
+        obj.email = obj.username + '@ams.edu';
+      }
+      
       return obj;
-    }).filter(r=>r.role&&r.full_name);
-    // Show only first 50 rows in preview (matches pagination)
-    const previewRows = _bulkRows.slice(0, 50);
-    document.getElementById('bulkPreviewBody').innerHTML = previewRows.map((r,i)=>`
-      <tr>
-        <td>${i+1}</td>
-        <td><span class="badge badge-${r.role==='faculty'?'blue':r.role==='admin'?'red':'green'}">${r.role}</span></td>
-        <td>${r.full_name}</td>
-        <td>${r.username||r.roll_no||'—'}</td>
-        <td>${r.department||'—'}</td>
-        <td>${r.program||'—'}</td>
-        <td>${r.section||'—'}</td>
-      </tr>`).join('');
+    }).filter(r => r.full_name && r.username); // Only require name + username, role is auto-detected
+    
+    // Initialize pagination for bulk preview
+    window._bulkPreviewCurrentPage = 0;
+    window._bulkPreviewPageSize = 50;
+    
+    // Render first page
+    bulkRenderPreviewPage(0);
     document.getElementById('bulkPreviewWrap').style.display='block';
     document.getElementById('bulkImportResult').style.display='none';
-    const totalText = _bulkRows.length > 50 ? `Preview: First 50 of ${_bulkRows.length} rows` : `Preview: ${_bulkRows.length} rows loaded`;
-    toast(totalText,'info');
+    
+    // Show role distribution
+    const facultyCount = _bulkRows.filter(r => r.role === 'faculty').length;
+    const studentCount = _bulkRows.filter(r => r.role === 'student').length;
+    const message = `Loaded ${_bulkRows.length} records: ${facultyCount} faculty, ${studentCount} students`;
+    console.log(`[previewBulkCSV] ${message}`);
+    toast(message,'info');
   };
   reader.readAsText(file);
+}
+
+// Render a page of bulk preview
+function bulkRenderPreviewPage(pageNum){
+  const pageSize = window._bulkPreviewPageSize || 50;
+  const start = pageNum * pageSize;
+  const end = start + pageSize;
+  const pageRows = _bulkRows.slice(start, end);
+  
+  document.getElementById('bulkPreviewBody').innerHTML = pageRows.map((r,i)=>`
+    <tr>
+      <td>${start + i + 1}</td>
+      <td><span class="badge badge-${r.role==='faculty'?'blue':r.role==='admin'?'red':'green'}">${r.role}</span></td>
+      <td>${r.full_name||'—'}</td>
+      <td>${r.username||r.roll_no||'—'}</td>
+      <td>${r.email||'—'}</td>
+      <td>${r.password?'*****':'—'}</td>
+      <td>${r.department||'—'}</td>
+      <td>${r.program||'—'}</td>
+      <td>${r.section||'—'}</td>
+      <td>${r.roll_no||'—'}</td>
+      <td>${r.employee_id||'—'}</td>
+      <td>${r.designation||'—'}</td>
+      <td>${r.subjects||'—'}</td>
+    </tr>`).join('');
+  
+  // Update pagination
+  const totalPages = Math.ceil((_bulkRows.length || 0) / pageSize);
+  const paginationDiv = document.getElementById('bulkPreviewPaginationControls');
+  const pageInfo = document.getElementById('bulkPageInfo');
+  const prevBtn = document.getElementById('bulkPrevBtn');
+  const nextBtn = document.getElementById('bulkNextBtn');
+  
+  if(paginationDiv && totalPages > 1){
+    paginationDiv.style.display='flex';
+    if(pageInfo) pageInfo.textContent=`Page ${pageNum+1} of ${totalPages} (${_bulkRows.length} total)`;
+    if(prevBtn) prevBtn.style.display = pageNum > 0 ? 'inline-block' : 'none';
+    if(nextBtn) nextBtn.style.display = pageNum < totalPages-1 ? 'inline-block' : 'none';
+  } else if(paginationDiv){
+    paginationDiv.style.display='none';
+  }
+  
+  window._bulkPreviewCurrentPage = pageNum;
+}
+
+function bulkPreviewNextPage(){
+  const pageSize = window._bulkPreviewPageSize || 50;
+  const totalPages = Math.ceil((_bulkRows.length || 0) / pageSize);
+  const nextPage = (window._bulkPreviewCurrentPage || 0) + 1;
+  if(nextPage < totalPages){
+    bulkRenderPreviewPage(nextPage);
+  }
+}
+
+function bulkPreviewPreviousPage(){
+  const prevPage = (window._bulkPreviewCurrentPage || 0) - 1;
+  if(prevPage >= 0){
+    bulkRenderPreviewPage(prevPage);
+  }
 }
 
 function clearBulkPreview(){
@@ -9349,31 +9332,140 @@ function downloadCSVTemplate(){
     'faculty,Dr. Meena Iyer,PUC26AIM001,meena@ams.edu,,AIM,AIM,,,PUC26AIM001,Assistant Professor,Machine Learning|Deep Learning,',
     'faculty,Prof. Raj Verma,PUC26ECE001,raj@ams.edu,,ECE,ECE,,,PUC26ECE001,HoD,VLSI Design|Signals,',
   ];
-  const blob=new Blob([rows.join('\n')],{type:'text/csv'});
+  const blob=new Blob([rows.join(' ')],{type:'text/csv'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ams_bulk_template.csv';a.click();
 }
 
 async function submitBulkImport(){
-  if(!_bulkRows.length){toast('No rows to import','warning');return;}
-  toast(`Importing ${_bulkRows.length} users…`,'info');
-  try{
-    const r=await fetch(`${window.AMS_CONFIG.API_URL}/api/users/bulk-import`,{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({users:_bulkRows})
-    });
-    const d=await r.json();
-    const res=document.getElementById('bulkImportResult');
-    res.style.display='block';
-    res.innerHTML=`<div class="card" style="background:var(--ink);padding:1rem">
-      <p style="color:var(--green)">✅ Created: ${d.created}</p>
-      <p style="color:var(--red)">❌ Failed: ${d.failed}</p>
-      ${d.errors?.length?`<details><summary style="cursor:pointer;font-size:.8rem;color:var(--text2)">Show errors</summary>
-        <ul style="font-size:.78rem;color:var(--text3);margin-top:.5rem">${d.errors.map(e=>`<li>${e.username}: ${e.error}</li>`).join('')}</ul>
-      </details>`:''}
+  if(!_bulkRows.length){
+    console.warn('[submitBulkImport] No rows to import');
+    toast('No rows to import','warning');
+    return;
+  }
+  
+  console.log('[submitBulkImport] Starting chunked import with', _bulkRows.length, 'users');
+  
+  const res = document.getElementById('bulkImportResult');
+  res.style.display = 'block';
+  
+  // ── CHUNKED BATCH PROCESSING ──
+  const BATCH_SIZE = 100; // 100 users per request (~30KB payload)
+  const batches = [];
+  
+  for(let i = 0; i < _bulkRows.length; i += BATCH_SIZE) {
+    batches.push(_bulkRows.slice(i, i + BATCH_SIZE));
+  }
+  
+  console.log(`[submitBulkImport] Split ${_bulkRows.length} users into ${batches.length} batches of ${BATCH_SIZE}`);
+  
+  let totalCreated = 0, totalFailed = 0;
+  const allErrors = [];
+  
+  for(let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+    const batch = batches[batchIdx];
+    const batchNum = batchIdx + 1;
+    
+    // Update UI with progress
+    res.innerHTML = `<div class="card" style="background:var(--ink);padding:1rem;border:2px solid var(--yellow)">
+      <p style="color:var(--yellow);font-weight:600">⏳ Processing batch ${batchNum}/${batches.length}...</p>
+      <p style="color:var(--text);margin-top:.5rem">Sending ${batch.length} users</p>
+      <p style="color:var(--text2);font-size:.85rem;margin-top:.5rem">✅ Created: ${totalCreated} | ❌ Failed: ${totalFailed}</p>
+      <div style="background:var(--bg);border-radius:.25rem;height:4px;margin-top:.5rem;overflow:hidden">
+        <div style="background:var(--yellow);height:100%;width:${(batchIdx/batches.length)*100}%;transition:width .3s"></div>
+      </div>
     </div>`;
-    if(d.created) toast(`✅ ${d.created} users imported!`,'success');
+    
+    console.log(`[submitBulkImport] Batch ${batchNum}/${batches.length}: ${batch.length} users`);
+    toast(`Sending batch ${batchNum}/${batches.length}...`, 'info');
+    
+    let batchSuccess = false;
+    let retries = 0;
+    const MAX_RETRIES = 2;
+    
+    while(!batchSuccess && retries <= MAX_RETRIES) {
+      try {
+        const payload = { users: batch };
+        const payloadStr = JSON.stringify(payload);
+        console.log(`[submitBulkImport] Batch ${batchNum} attempt ${retries + 1}: ${payloadStr.length} bytes, ${batch.length} users`);
+        
+        // Simple fetch without AbortController timeout (relies on browser default)
+        const r = await fetch(`${window.AMS_CONFIG.API_URL}/api/users/bulk-import`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+          body: payloadStr
+        });
+        
+        console.log(`[submitBulkImport] Batch ${batchNum} response status: ${r.status}`);
+        
+        const d = await r.json();
+        
+        if(r.ok && d.success !== false) {
+          totalCreated += d.created || 0;
+          totalFailed += d.failed || 0;
+          if(d.errors?.length) {
+            allErrors.push(...d.errors);
+            // Log error summary WITHOUT sensitive data
+            console.log(`[submitBulkImport] Batch ${batchNum} has ${d.errors.length} errors:`);
+            // Show error types/reasons but NOT user data
+            const errorReasons = {};
+            d.errors.forEach(err => {
+              const reason = err.error || 'unknown error';
+              errorReasons[reason] = (errorReasons[reason] || 0) + 1;
+            });
+            console.log('[submitBulkImport] Error breakdown:', errorReasons);
+          }
+          batchSuccess = true;
+          console.log(`[submitBulkImport] Batch ${batchNum} SUCCESS: +${d.created} created, ${d.failed} failed`);
+        } else {
+          throw new Error(`HTTP ${r.status}: ${d.error || 'server error'}`);
+        }
+        
+      } catch(e) {
+        retries++;
+        console.error(`[submitBulkImport] Batch ${batchNum} attempt ${retries} error:`, e.message);
+        
+        if(retries <= MAX_RETRIES) {
+          const waitMs = 1000 * retries; // Wait 1s, 2s for retries
+          console.log(`[submitBulkImport] Retrying batch ${batchNum} in ${waitMs}ms...`);
+          await new Promise(r => setTimeout(r, waitMs));
+        } else {
+          allErrors.push(`Batch ${batchNum}: Failed after ${MAX_RETRIES} retries - ${e.message}`);
+          totalFailed += batch.length;
+          batchSuccess = true; // Exit retry loop
+        }
+      }
+    }
+    
+    // Delay between batches
+    if(batchIdx < batches.length - 1) {
+      await new Promise(r => setTimeout(r, 300));
+    }
+  }
+  
+  // ── FINAL RESULTS ──
+  console.log(`[submitBulkImport] COMPLETE: ${totalCreated} created, ${totalFailed} failed`);
+  
+  const success = totalCreated > 0 && totalFailed === 0;
+  const partial = totalCreated > 0 && totalFailed > 0;
+  
+  res.innerHTML = `<div class="card" style="background:var(--ink);padding:1rem;border:2px solid ${success ? 'var(--green)' : partial ? 'var(--yellow)' : 'var(--red)'}">
+    <p style="color:${success ? 'var(--green)' : partial ? 'var(--yellow)' : 'var(--red)'};font-weight:600">${success ? '✅' : partial ? '⚠️' : '❌'} Import ${success ? 'Complete' : partial ? 'Partial' : 'Failed'}</p>
+    <p style="color:var(--green);margin-top:.5rem">✅ Created: <strong>${totalCreated}</strong> users</p>
+    <p style="color:var(--red)">❌ Failed: <strong>${totalFailed}</strong> users</p>
+    <p style="color:var(--text2);font-size:.85rem;margin-top:.75rem">Processed ${batches.length} batches</p>
+    ${allErrors.length ? `<details style="margin-top:.75rem"><summary style="cursor:pointer;font-size:.85rem;color:var(--text2)">📋 Show errors (${allErrors.length})</summary>
+      <ul style="font-size:.75rem;color:var(--text3);margin-top:.5rem;max-height:300px;overflow-y:auto;list-style:none;padding:0">${allErrors.map(e => `<li style="margin:.25rem 0">${typeof e === 'string' ? e : `${e.username}: ${e.error}`}</li>`).join('')}</ul>
+    </details>` : ''}
+  </div>`;
+  
+  if(totalCreated > 0) {
+    toast(`✅ Imported ${totalCreated} users!`, 'success');
     clearBulkPreview();
-  }catch(e){ toast('Import error: '+e.message,'error'); }
+    // Refresh user list
+    setTimeout(() => loadUserList(), 1000);
+  } else {
+    toast(`Import failed - check errors`, 'error');
+  }
 }
 
 // ── ASSIGN SUBJECTS (faculty list with inline edit) ────────
@@ -9663,12 +9755,16 @@ async function reloadUserListQuietly(){
       const users = data.users||[];
       const tbody = document.getElementById('userTableBody');
       if(tbody && users.length){
-        window._umAllUsers = users;
-        window._umCurrentPage = 0;
-        window._umPageSize = 50;
         window._umUserMap = {};
-        users.forEach(u => window._umUserMap[u.id] = u);
-        umRenderUserPage();
+        users.forEach(u=>{ window._umUserMap[u.id]=u; });
+        tbody.innerHTML=users.map(u=>{
+          const suspended = u.is_active===false;
+          const idLabel = u.role==='student'?(u.roll_no||u.username||'—'):u.role==='faculty'?(u.employee_id||u.username||'—'):(u.username||'admin');
+          const line2 = u.role==='faculty'?[u.program, u.designation].filter(Boolean).join(' · '):[u.program, u.section].filter(Boolean).join(' · ');
+          const infoCell = `<span style="font-size:.82rem;font-weight:600">${u.department||'—'}</span>${line2?`<br><span style="font-size:.72rem;color:var(--text3)">${line2}</span>`:''}${u.role==='faculty'&&u.subjects?`<br><span style="font-size:.7rem;color:var(--text2);" title="${(u.subjects).replace(/\"/g,'&quot;')}">${u.subjects.length>30?u.subjects.slice(0,30)+'…':u.subjects}</span>`:''}` ;
+          const statusLabel = suspended?'<span style="color:#ef4444;font-size:.75rem">🚫 SUSPENDED</span>':'<span style="color:#16a34a;font-size:.75rem">✓ Active</span>';
+          return `<tr class="um-row" data-id="${u.id}" style="${suspended?'opacity:0.6;':''}"><td><input type="checkbox" class="um-row-chk" data-id="${u.id}" onchange="umUpdateBulkBar()"/></td><td><strong>${idLabel}</strong>${u.full_name?`<br><span style="color:var(--text3);font-size:.75rem">${u.full_name}</span>`:''}${u.email?`<br><span style="color:var(--text3);font-size:.72rem">${u.email}</span>`:''}</td><td>${infoCell}</td><td>${u.role==='faculty'?'👨‍🏫Fac':u.role==='student'?'👤Std':'🔐Admin'}</td><td>${statusLabel}</td><td><button class="btn btn-ghost btn-sm" title="Edit" onclick="openEditUser(${JSON.stringify(u).replace(/\"/g,'&quot;')})\">✏️</button> <button class="btn btn-ghost btn-sm" title="${suspended?'Activate':'Suspend'}" onclick="${suspended?'activateUser':'suspendUser'}('${u.id}')\">💤</button></td></tr>`;
+        }).join('');       }     }   }catch(e){     console.log('[reloadUserListQuietly] Background reload skipped:', e.message);   } }
 
 async function loadUserList(){
   try{
@@ -9684,148 +9780,191 @@ async function loadUserList(){
     if(params.length) url += '?' + params.join('&');
 
     console.log('[loadUserList] Fetch URL:', url);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      console.warn('[loadUserList] Timeout after 30 seconds - backend may be initializing or overloaded');
+      controller.abort();
+    }, 30000); // 30 second timeout for cold Cloud Run startup
 
-    let resp = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json'
+    // Get Firebase auth token for secure API call (optional)
+    const headers = {};
+    console.log('[loadUserList] Checking Firebase auth:', {
+      hasFirebaseAuth: !!window.firebaseAuth,
+      hasCurrentUser: !!(window.firebaseAuth?.currentUser),
+      userEmail: window.firebaseAuth?.currentUser?.email || 'none'
+    });
+    
+    try{
+      if(window.getFirebaseToken && typeof window.getFirebaseToken === 'function'){
+        const token = await window.getFirebaseToken().catch(err => {
+          console.warn('[loadUserList] Token retrieval error:', err.message);
+          return null;
+        });
+        console.log('[loadUserList] Token retrieval result:', {
+          tokenExists: !!token,
+          tokenLength: token?.length || 0
+        });
+        
+        if(token){
+          headers['Authorization'] = `Bearer ${token}`;
+          console.log('[loadUserList] Using authenticated request');
+        }else{
+          console.warn('[loadUserList] No Firebase token available - proceeding without auth');
+        }
+      }else{
+        console.warn('[loadUserList] Firebase token function not available');
       }
+    }catch(e){
+      console.warn('[loadUserList] Failed to get Firebase token:', {message: e.message});
+    }
+
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      headers: headers
     }).catch((err)=>{
-      console.error('[loadUserList] Fetch error:', err.message, err);
+      console.warn('[loadUserList] Fetch failed:', err.message);
       return null;
     });
     
-    if(!resp) {
-      console.error('[loadUserList] No response received');
+    clearTimeout(timeout);
+    
+    if(!resp||!resp.ok) {
+      console.error('[loadUserList] Response not ok:', resp?.status);
       const tbody = document.getElementById('userTableBody');
       if(tbody) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:2rem;color:#f85149"><strong>❌ Failed to load users</strong><br/><small style="color:var(--text3)">Network error - no response from server</small></td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;padding:2rem;color:#f85149"><strong>❌ Failed to load users</strong><br/><small style="color:var(--text3)">Backend may be unavailable. Try refreshing the page.</small></td></tr>';
       }
-      return;
+      throw new Error('Failed to fetch users - status ' + (resp?.status || 'timeout'));
     }
     
-    if(!resp.ok) {
-      console.error('[loadUserList] Response not ok - Status:', resp.status, resp.statusText);
-      const tbody = document.getElementById('userTableBody');
-      if(tbody) {
-        tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:2rem;color:#f85149"><strong>❌ Failed to load users</strong><br/><small style="color:var(--text3)">Error: HTTP ' + resp.status + ' ' + resp.statusText + '</small></td></tr>';
-      }
-      return;
-    }
-    
-    const data = await resp.json().catch((err)=>{
-      console.error('[loadUserList] JSON parse error:', err);
-      return null;
-    });
-    
-    if(!data||!data.users) {
-      console.error('[loadUserList] Invalid data structure:', data);
-      const tbody = document.getElementById('userTableBody');
-      if(tbody) tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:2rem;color:#f85149">No users found</td></tr>';
-      return;
-    }
-    
-    console.log('[loadUserList] Received', data.users.length, 'users');
+    const data = await resp.json();
+    console.log('[loadUserList] Received', (data.users||[]).length, 'users');
     
     const users = data.users||[];
     const tbody = document.getElementById('userTableBody');
     if(!tbody) return;
     if(!users.length){
       console.warn('[loadUserList] No users found');
-      tbody.innerHTML='<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text3)">🚫 No users found</td></tr>';
+      tbody.innerHTML='<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text3)">🚫 No users found</td></tr>';
       return;
     }
     
     // Store users globally for pagination
     window._umAllUsers = users;
     window._umCurrentPage = 0;
-    window._umPageSize = 50;
+    window._umPageSize = 200;  // Increased from 100 to 200 for better throughput
+    window._umPersistentSelected = new Set();  // Cross-page selection persistence
+    
+    // Create user map for quick lookups
     window._umUserMap = {};
     users.forEach(u => window._umUserMap[u.id] = u);
     
-    // Render first page using pagination
-    umRenderUserPage();
+    // Render first page
+    umRenderUserPage(0);
     populateDeptDropdowns();
   }catch(e){
-    console.error('[loadUserList] Exception caught:', e.message, e);
     const tbody = document.getElementById('userTableBody');
-    if(tbody) tbody.innerHTML='<tr><td colspan="7" style="text-align:center;padding:2rem;color:#f85149"><strong>❌ Failed to load users</strong><br/><small style="color:var(--text3)">Error: ' + (e.message || e) + '</small></td></tr>';
+    if(tbody) tbody.innerHTML='<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text3)">Failed to load users</td></tr>';
   }
 }
 
-// ── PAGINATION FUNCTIONS ────────────────────────────────
-function umRenderUserPage(){
+// Render a specific page of users
+function umRenderUserPage(pageNum){
   const users = window._umAllUsers || [];
-  const pageSize = window._umPageSize || 20;
-  const currentPage = window._umCurrentPage || 0;
-  const totalPages = Math.ceil(users.length / pageSize);
+  const pageSize = window._umPageSize || 200;
+  const start = pageNum * pageSize;
+  const end = start + pageSize;
+  const pageUsers = users.slice(start, end);
   
-  // Get users for this page
-  const startIdx = currentPage * pageSize;
-  const endIdx = startIdx + pageSize;
-  const pageUsers = users.slice(startIdx, endIdx);
-  
-  // Render table rows
   const tbody = document.getElementById('userTableBody');
   if(!tbody) return;
   
-  tbody.innerHTML = pageUsers.map(u => {
-    const suspended = u.is_active === false;
-    const idLabel = u.role === 'student'
-      ? (u.roll_no || u.username || '—')
-      : u.role === 'faculty'
-        ? (u.employee_id || u.username || '—')
-        : (u.username || 'admin');
-    
+  if(!pageUsers.length && pageNum === 0){
+    tbody.innerHTML='<tr><td colspan="8" style="text-align:center;padding:2rem;color:var(--text3)">🚫 No users found</td></tr>';
+    const paginationDiv = document.getElementById('userPaginationControls');
+    if(paginationDiv) paginationDiv.style.display='none';
+    return;
+  }
+  
+  // Render rows for this page
+  tbody.innerHTML = pageUsers.map(u=>{
+    const suspended = u.is_active===false;
+    const idLabel = u.role==='student'
+      ? (u.roll_no||u.username||'—')
+      : u.role==='faculty'
+        ? (u.employee_id||u.username||'—')
+        : (u.username||'admin');
+    // Build compact dept/info cell: dept, program, section or designation
+    const line2 = u.role==='faculty'
+      ? [u.program, u.designation].filter(Boolean).join(' · ')
+      : [u.program, u.section].filter(Boolean).join(' · ');
+    const infoCell = `<span style="font-size:.82rem;font-weight:600">${u.department||'—'}</span>${line2?`<br><span style="font-size:.72rem;color:var(--text3)">${line2}</span>`:''}${u.role==='faculty'&&u.subjects?`<br><span style="font-size:.7rem;color:var(--text2);" title="${(u.subjects).replace(/"/g,'&quot;')}">${u.subjects.length>30?u.subjects.slice(0,30)+'…':u.subjects}</span>`:''}` ;
     return `<tr>
       <td style="width:2rem"><input type="checkbox" class="um-row-chk" data-id="${u.id}" onchange="umUpdateBulkBar()" style="cursor:pointer;width:1rem;height:1rem"/></td>
       <td class="fw-semibold" style="font-size:.82rem;white-space:nowrap">${idLabel}</td>
-      <td style="white-space:nowrap;font-weight:500">${u.full_name || u.username}</td>
-      <td><span class="badge badge-${u.role === 'admin' ? 'red' : u.role === 'faculty' ? 'blue' : 'green'}">${u.role}</span></td>
-      <td style="font-size:.8rem;color:var(--text2)">${u.email || '—'}</td>
-      <td><span class="badge badge-${suspended ? 'red' : 'green'}">${suspended ? 'Suspended' : 'Active'}</span></td>
+      <td style="white-space:nowrap;font-weight:500">${u.full_name||u.username}</td>
+      <td><span class="badge badge-${u.role==='admin'?'red':u.role==='faculty'?'blue':'green'}">${u.role}</span></td>
+      <td style="max-width:180px">${infoCell}</td>
+      <td style="font-size:.8rem;color:var(--text2)">${u.email||'—'}</td>
+      <td><span class="badge badge-${suspended?'red':'green'}">${suspended?'Suspended':'Active'}</span></td>
       <td style="white-space:nowrap">
         <div style="display:flex;gap:.3rem;align-items:center">
           <button class="btn btn-outline btn-sm" title="Edit" onclick="openEditUser(window._umUserMap['${u.id}'])">✏️</button>
           ${suspended
-            ? `<button class="btn btn-success btn-sm" title="Activate" onclick="toggleUserSuspend('${u.id}',false)">▶</button>`
-            : `<button class="btn btn-orange btn-sm" title="Suspend" onclick="toggleUserSuspend('${u.id}',true)">⏸</button>`
+            ?`<button class="btn btn-success btn-sm" title="Activate" onclick="toggleUserSuspend('${u.id}',false)">▶</button>`
+            :`<button class="btn btn-orange btn-sm" title="Suspend" onclick="toggleUserSuspend('${u.id}',true)">⏸</button>`
           }
-          <button class="btn btn-danger btn-sm" title="Delete" onclick="if(confirm('Permanently delete this user?'))deleteUser('${u.id}')">🗑️</button>
         </div>
       </td>
     </tr>`;
   }).join('');
   
-  // Update pagination info
+  // ── RESTORE PERSISTENT SELECTIONS ──
+  // Re-check boxes for users that were previously selected (across pages)
+  if(window._umPersistentSelected && window._umPersistentSelected.size > 0){
+    setTimeout(() => {
+      document.querySelectorAll('.um-row-chk').forEach(chk => {
+        if(window._umPersistentSelected.has(chk.dataset.id)){
+          chk.checked = true;
+        }
+      });
+    }, 50);
+  }
+  
+  // Update pagination controls
+  const totalPages = Math.ceil(users.length / pageSize);
+  const paginationDiv = document.getElementById('userPaginationControls');
   const pageInfo = document.getElementById('umPageInfo');
   const prevBtn = document.getElementById('umPrevBtn');
   const nextBtn = document.getElementById('umNextBtn');
-  const userCount = document.getElementById('umUserCount');
   
-  if(pageInfo) pageInfo.textContent = `Page ${currentPage + 1} of ${totalPages}`;
-  if(prevBtn) prevBtn.disabled = currentPage === 0;
-  if(nextBtn) nextBtn.disabled = currentPage >= totalPages - 1;
-  if(userCount) userCount.textContent = `${users.length} users total`;
+  if(paginationDiv){
+    if(totalPages > 1){
+      paginationDiv.style.display='flex';
+      if(pageInfo) pageInfo.textContent=`Page ${pageNum+1} of ${totalPages} (${users.length} total)`;
+      if(prevBtn) prevBtn.style.display = pageNum > 0 ? 'inline-block' : 'none';
+      if(nextBtn) nextBtn.style.display = pageNum < totalPages-1 ? 'inline-block' : 'none';
+    }else{
+      paginationDiv.style.display='none';
+    }
+  }
+  
+  window._umCurrentPage = pageNum;
 }
 
+// Navigation functions
 function umNextPage(){
-  const users = window._umAllUsers || [];
-  const pageSize = window._umPageSize || 50;
-  const totalPages = Math.ceil(users.length / pageSize);
-  
-  if(window._umCurrentPage < totalPages - 1){
-    window._umCurrentPage++;
-    umRenderUserPage();
-    window.scrollTo({top: 0, behavior: 'smooth'});
+  const totalPages = Math.ceil((window._umAllUsers?.length || 0) / (window._umPageSize || 200));
+  const nextPage = (window._umCurrentPage || 0) + 1;
+  if(nextPage < totalPages){
+    umRenderUserPage(nextPage);
   }
 }
 
 function umPreviousPage(){
-  if(window._umCurrentPage > 0){
-    window._umCurrentPage--;
-    umRenderUserPage();
-    window.scrollTo({top: 0, behavior: 'smooth'});
+  const prevPage = (window._umCurrentPage || 0) - 1;
+  if(prevPage >= 0){
+    umRenderUserPage(prevPage);
   }
 }
 
@@ -11324,7 +11463,7 @@ async function captureQRFaceAndLocation(sessionId,course){
   const name=document.getElementById('qrName').value.trim();
   if(!rollNo||!name){alert('Please enter Roll Number and Name');return;}
   const body=document.getElementById('qrAttContent');
-  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading">📍</div><p>Verifying location…</p></div>`;
+  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading" style="animation:spin 1.2s linear infinite">📍</div><p>Verifying location…</p></div>`;
   try{
     const loc=await getLocation();
     if(!isInCollege(loc.lat,loc.lng)){
@@ -11351,7 +11490,7 @@ async function captureQRFaceAndLocation(sessionId,course){
 async function captureQRFaceSnapshot(sessionId,course,rollNo,name){
   stopCamera();
   const body=document.getElementById('qrAttContent');
-  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading">🔍</div><p>Verifying face…</p></div>`;
+  body.innerHTML=`<div class="att-status"><div class="att-icon-wrap loading" style="animation:spin 1.2s linear infinite">🔍</div><p>Verifying face…</p></div>`;
   setTimeout(()=>{
     body.innerHTML=`<div class="att-status">
       <div class="att-icon-wrap success">✅</div>
@@ -11551,7 +11690,7 @@ async function loadFacultySubjectStudents(subjectCode){
   if(!container) return;
   
   container.innerHTML = `<div style="text-align:center;padding:2rem">
-    <div class="loading" style="font-size:2rem">📚</div>
+    <div class="loading" style="animation:spin 1.2s linear infinite;font-size:2rem">📚</div>
     <p style="color:var(--text2)">Loading students...</p>
   </div>`;
   
@@ -11863,5 +12002,4 @@ async function purgeArchivedTimetable(archiveId, subject){
     console.error('[purgeArchivedTimetable]', e);
     showNotification(`❌ Purge failed: ${e.message}`, 'error');
   }
-}
-      
+} 
