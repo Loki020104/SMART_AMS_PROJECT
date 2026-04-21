@@ -4534,32 +4534,51 @@ async function refreshRegisteredStudentsPanel(){
   const panel=document.getElementById('registeredStudentsPanel');
   if(!panel) return;
   panel.innerHTML='<div class="text-muted text-sm" style="padding:1rem">⏳ Loading students…</div>';
+  
   try{
-    // Build filter: try to pick up batch from the selected timetable slot
-    let params = '';
-    const fid=(AMS.profile && AMS.profile.id)||AMS.user.id||'';
-    const dept=(AMS.profile && AMS.profile.department)||'';
-    if(dept) params+='&department='+encodeURIComponent(dept);
+    // Get selected course/section info from dropdowns
+    const hourDropdown = document.getElementById('faHour');
+    const selectedHourOpt = hourDropdown && hourDropdown.selectedIndex >= 0 ? hourDropdown.options[hourDropdown.selectedIndex] : null;
+    const selectedSection = selectedHourOpt ? (selectedHourOpt.dataset.section || selectedHourOpt.dataset.batch || '') : '';
+    const selectedDept = selectedHourOpt ? (selectedHourOpt.dataset.dept || '') : '';
+    
+    // Fallback to profile department
+    let dept = selectedDept || (AMS.profile && AMS.profile.department) || '';
+    let section = selectedSection || '';
+    
+    // Build filter params
+    let params = 'role=student';
+    if(dept) params += '&department=' + encodeURIComponent(dept);
+    if(section) params += '&section=' + encodeURIComponent(section);
 
-    const res=await fetch(`${window.AMS_CONFIG.API_URL}/api/registered-students?1=1${params}`).catch(()=>null);
-    if(!res||!res.ok) throw new Error(`HTTP ${res?.status||'no response'}`);
-    const data=await res.json();
-    const students=data.students||[];
+    const res = await fetch(`${window.AMS_CONFIG.API_URL}/api/users/list?${params}`).catch(()=>null);
+    if(!res || !res.ok) throw new Error(`HTTP ${res?.status || 'no response'}`);
+    
+    const data = await res.json();
+    const students = Array.isArray(data) ? data : (data.users || []);
+    
     if(!students.length){
-      panel.innerHTML='<p style="text-align:center;color:var(--text2);padding:2rem">📭 No registered students found.</p>';
+      panel.innerHTML=`<p style="text-align:center;color:var(--text2);padding:2rem">📭 No students in this class.${selectedSection ? '<br><small>Select a different class or refresh.</small>' : ''}</p>`;
       return;
     }
-    panel.innerHTML=`<div class="tbl-wrap"><table style="width:100%">
-      <thead><tr><th>Roll No</th><th>Name</th><th>Email</th><th>Section</th><th>Last Login</th></tr></thead>
-      <tbody>${students.map(s=>`<tr>
-        <td class="fw-semibold">${s.roll_no||'—'}</td>
-        <td>${s.name||'—'}</td>
-        <td class="text-muted">${s.email||'—'}</td>
-        <td>${s.section||'—'}</td>
-        <td><small>${s.last_login?new Date(s.last_login).toLocaleDateString('en-IN'):'—'}</small></td>
+    
+    // Show class info header
+    const classInfo = selectedSection ? ` — ${selectedSection}` : (selectedDept ? ` — ${selectedDept}` : '');
+    panel.innerHTML=`<div style="background:rgba(31,111,235,0.06);padding:0.75rem;border-radius:6px;margin-bottom:1rem;font-size:0.85rem;border-left:3px solid var(--blue2)">
+      <strong>📚 Class${classInfo}</strong>
+      <span style="float:right;color:var(--text3)">${students.length} student${students.length!==1?'s':''}</span>
+    </div><div class="tbl-wrap"><table style="width:100%;font-size:0.85rem">
+      <thead><tr><th style="padding:0.5rem 0.8rem">Roll No</th><th style="padding:0.5rem 0.8rem">Name</th><th style="padding:0.5rem 0.8rem">Email</th><th style="padding:0.5rem 0.8rem">Section</th><th style="padding:0.5rem 0.8rem">Last Login</th></tr></thead>
+      <tbody>${students.map(s=>`<tr style="border-bottom:1px solid var(--border)">
+        <td class="fw-semibold" style="padding:0.5rem 0.8rem">${s.roll_no||s.username||'—'}</td>
+        <td style="padding:0.5rem 0.8rem">${s.full_name||s.name||'—'}</td>
+        <td class="text-muted" style="padding:0.5rem 0.8rem;font-size:0.8rem">${s.email||'—'}</td>
+        <td style="padding:0.5rem 0.8rem">${s.section||'—'}</td>
+        <td style="padding:0.5rem 0.8rem"><small>${s.last_login?new Date(s.last_login).toLocaleDateString('en-IN'):'—'}</small></td>
       </tr>`).join('')}</tbody>
-    </table></div><div class="text-muted" style="font-size:.75rem;padding:.5rem .75rem">Showing ${students.length} student(s)</div>`;
+    </table></div><div class="text-muted" style="font-size:.75rem;padding:.5rem .75rem">Showing ${students.length} student${students.length!==1?'s':''} from <strong>${selectedSection || selectedDept || 'selected class'}</strong></div>`;
   }catch(e){
+    console.error('[RefreshStudents]', e);
     panel.innerHTML=`<p style="text-align:center;color:var(--red);padding:2rem">⚠ Error: ${e.message}</p>`;
   }
 }
@@ -5004,7 +5023,7 @@ async function loadCourseHours(){
     const displaySlots = matchedSlots.length ? matchedSlots : slots;
     if(displaySlots.length){
       hSel.innerHTML = displaySlots.map(s=>
-        `<option value="${s.hour_number||s.id}">`+
+        `<option value="${s.hour_number||s.id}" data-section="${s.section||s.batch||''}" data-batch="${s.batch||''}" data-dept="${s.department||''}">`+
         `Hour ${s.hour_number||1} – ${s.subject_name||'Class'} `+
         `(${(s.start_time||'').slice(0,5)}–${(s.end_time||'').slice(0,5)})</option>`
       ).join('');
@@ -5012,6 +5031,8 @@ async function loadCourseHours(){
       hSel.innerHTML = '<option value="1">Hour 1</option><option value="2">Hour 2</option>'+
         '<option value="3">Hour 3</option><option value="4">Hour 4</option><option value="5">Hour 5</option>';
     }
+    // Auto-update students list when hour changes
+    refreshRegisteredStudentsPanel();
   }catch(e){ console.warn('loadCourseHours:',e); }
 }
 
