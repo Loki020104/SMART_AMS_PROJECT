@@ -9108,7 +9108,7 @@ async function submitAddUserWithFace(){
     const resp=await fetch(`${window.AMS_CONFIG.API_URL}/api/users/register-face`,{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({user_id:AMS.newUserId,roll_no:AMS.newUserRoll,image:AMS.newUserFaceData})
+      body:JSON.stringify({user_id:AMS.newUserId,roll_no:AMS.newUserRoll,face_image:AMS.newUserFaceData})
     }).catch(()=>null);
     if(resp){
       const d=await resp.json();
