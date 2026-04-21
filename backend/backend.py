@@ -2013,6 +2013,217 @@ def mark_qr_attendance():
     
     return jsonify(verified=verified,name=names[idx] if verified else name,confidence=confidence)
 
+# ── MOBILE QR ATTENDANCE ENDPOINTS ──
+# Simple URL-based QR attendance for phone scanning
+
+@app.route("/api/qr/mobile-session", methods=["POST"])
+def create_mobile_qr_session():
+    """Faculty: Create a mobile-friendly QR attendance session with URL"""
+    try:
+        d = request.json
+        faculty_id = d.get("faculty_id")
+        course_id = d.get("course_id", "")
+        subject = d.get("subject", "Class")
+        validity_minutes = int(d.get("validity_minutes", 5))
+        
+        if not faculty_id:
+            return jsonify(success=False, error="Missing faculty_id"), 400
+        
+        # Generate unique session ID
+        session_id = str(uuid.uuid4())[:8].upper()
+        expires_at = (datetime.utcnow() + timedelta(minutes=validity_minutes)).isoformat()
+        
+        # Store session
+        if sb:
+            try:
+                sb.table("qr_sessions").insert({
+                    "session_id": session_id,
+                    "faculty_id": faculty_id,
+                    "course_id": course_id,
+                    "subject": subject,
+                    "expires_at": expires_at,
+                    "created_at": datetime.utcnow().isoformat(),
+                    "active": True,
+                    "attendance_count": 0
+                }).execute()
+            except Exception as e:
+                print(f"[Mobile-QR] DB Error: {e}")
+        
+        # Generate QR code with URL
+        qr_url = f"{request.host_url.rstrip('/')}/attendance/mark?session={session_id}"
+        qr = qrcode.QRCode(version=1, box_size=10, border=5)
+        qr.add_data(qr_url)
+        qr.make(fit=True)
+        
+        img = qr.make_image(fill_color="black", back_color="white")
+        img_byte = BytesIO()
+        img.save(img_byte, format='PNG')
+        qr_base64 = base64.b64encode(img_byte.getvalue()).decode()
+        
+        return jsonify(
+            success=True,
+            session_id=session_id,
+            qr_code_base64=qr_base64,
+            qr_url=qr_url,
+            expires_at=expires_at,
+            validity_minutes=validity_minutes
+        )
+    except Exception as e:
+        print(f"[Mobile-QR] Error: {e}")
+        return jsonify(success=False, error=str(e)), 500
+
+@app.route("/api/attendance/validate-session", methods=["POST"])
+def validate_attendance_session():
+    """Validate QR session from mobile attendance page"""
+    try:
+        d = request.json
+        session_id = d.get("session_id")
+        
+        if not session_id or not sb:
+            return jsonify(success=False, error="Invalid session"), 400
+        
+        # Check session exists and is active
+        result = sb.table("qr_sessions").select("*").eq("session_id", session_id).execute()
+        
+        if not result.data:
+            return jsonify(success=False, error="Session not found or expired"), 404
+        
+        session = result.data[0]
+        
+        # Check if expired
+        expires = datetime.fromisoformat(session["expires_at"])
+        if datetime.utcnow() > expires:
+            return jsonify(success=False, error="QR session expired"), 410
+        
+        return jsonify(
+            success=True,
+            subject=session.get("subject", "Class"),
+            faculty_id=session.get("faculty_id"),
+            validity_minutes=session.get("validity_minutes", 5)
+        )
+    except Exception as e:
+        print(f"[Validate-Session] Error: {e}")
+        return jsonify(success=False, error=str(e)), 500
+
+@app.route("/api/attendance/mark-qr", methods=["POST"])
+def mark_qr_attendance_mobile():
+    """Mark attendance from mobile attendance page with location and face"""
+    try:
+        d = request.json
+        session_id = d.get("session_id")
+        roll_no = d.get("roll_no", "").strip().upper()
+        name = d.get("name", "").strip()
+        department = d.get("department", "")
+        latitude = d.get("latitude")
+        longitude = d.get("longitude")
+        face_image_b64 = d.get("face_image", "")
+        
+        if not all([session_id, roll_no, name, latitude, longitude, face_image_b64]):
+            return jsonify(success=False, error="Missing required fields"), 400
+        
+        if not sb:
+            return jsonify(success=False, error="Database not configured"), 500
+        
+        # Validate session
+        session_result = sb.table("qr_sessions").select("*").eq("session_id", session_id).execute()
+        if not session_result.data:
+            return jsonify(success=False, error="Session not found"), 404
+        
+        session_data = session_result.data[0]
+        expires = datetime.fromisoformat(session_data["expires_at"])
+        if datetime.utcnow() > expires:
+            return jsonify(success=False, error="Session expired"), 410
+        
+        # Process face recognition
+        verified = False
+        confidence = 0
+        matched_name = name
+        
+        try:
+            img = decode_b64_image(face_image_b64)
+            tmp_file = f"tmp_face_{uuid.uuid4().hex[:8]}.jpg"
+            img.save(tmp_file)
+            
+            face_encs = encode_image(tmp_file)
+            os.remove(tmp_file)
+            
+            if face_encs:
+                encs, names_list = load_encodings()
+                if encs:
+                    current_encoding = face_encs[0]
+                    distances = [np.linalg.norm(current_encoding - e) for e in encs]
+                    distances = np.array(distances)
+                    idx = np.argmin(distances)
+                    min_distance = distances[idx]
+                    verified = min_distance <= 0.6
+                    confidence = float(max(0, 1 - (min_distance / 2.0)))
+                    if verified:
+                        matched_name = names_list[idx]
+        except Exception as e:
+            print(f"[Face-Recognition] Error: {e}")
+        
+        # Check location (simple distance check from college)
+        college_lat, college_lng = 13.145615, 77.574597  # Example coordinates
+        location_verified = False
+        if latitude is not None and longitude is not None:
+            # Calculate distance
+            distance_km = calculate_distance(latitude, longitude, college_lat, college_lng)
+            location_verified = distance_km <= 1.0  # Within 1km
+        
+        # Determine final verified status (all conditions must pass)
+        final_verified = verified and location_verified
+        
+        # Store attendance record
+        attendance_record = {
+            "session_id": session_id,
+            "roll_no": roll_no,
+            "name": matched_name if verified else name,
+            "department": department,
+            "latitude": latitude,
+            "longitude": longitude,
+            "face_verified": verified,
+            "location_verified": location_verified,
+            "confidence": confidence,
+            "verified": final_verified,
+            "timestamp": datetime.utcnow().isoformat(),
+            "date": datetime.utcnow().date().isoformat(),
+            "method": "qr-mobile"
+        }
+        
+        try:
+            sb.table("attendance").insert(attendance_record).execute()
+            
+            # Update session attendance count
+            sb.table("qr_sessions").update({
+                "attendance_count": session_data.get("attendance_count", 0) + 1
+            }).eq("session_id", session_id).execute()
+        except Exception as e:
+            print(f"[Attendance-DB] Error: {e}")
+        
+        return jsonify(
+            success=True,
+            verified=final_verified,
+            name=matched_name if verified else name,
+            face_verified=verified,
+            location_verified=location_verified,
+            confidence=confidence,
+            message="Attendance recorded" + (" - All verifications passed!" if final_verified else " - Pending faculty review")
+        )
+    except Exception as e:
+        print(f"[Mark-QR-Mobile] Error: {e}")
+        return jsonify(success=False, error=str(e)), 500
+
+def calculate_distance(lat1, lon1, lat2, lon2):
+    """Calculate distance between two coordinates in km (Haversine formula)"""
+    from math import radians, sin, cos, asin, sqrt
+    R = 6371  # Earth's radius in km
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * asin(sqrt(a))
+    return R * c
+
 # ── USER MANAGEMENT API ──
 @app.route("/api/users/register", methods=["POST"])
 def user_register():

@@ -929,14 +929,110 @@ function initStudentQRScanner(){
 
 // Faculty QR Generator
 function renderFacultyQRGenerator(){
-  return '<div id="qrGeneratorContainer" class="card"></div>';
+  return `
+    <div class="card">
+      <div class="card-header">
+        <h2>📲 Generate Mobile QR Code</h2>
+        <p>Create a QR code for student mobile attendance</p>
+      </div>
+      <div class="card-content" id="qrGeneratorContent">
+        <div class="form-group">
+          <label>📚 Course/Class</label>
+          <input type="text" id="qrCourse" placeholder="e.g., CS101 - Data Structures" value="">
+        </div>
+        <div class="form-group">
+          <label>📝 Subject/Topic</label>
+          <input type="text" id="qrSubject" placeholder="e.g., Linked Lists" value="">
+        </div>
+        <div class="form-group">
+          <label>⏱️ Validity (minutes)</label>
+          <input type="number" id="qrValidity" placeholder="5" value="5" min="1" max="120">
+        </div>
+        
+        <button class="btn" style="width:100%; background:var(--blue2); color:white; padding:1rem; border-radius:8px; border:none; cursor:pointer; font-weight:600; margin:1.5rem 0" onclick="generateMobileQR()">
+          🎯 Generate QR Code
+        </button>
+        
+        <div id="generatedQRContent" style="display:none; text-align:center">
+          <img id="qrCodeImage" src="" style="max-width:300px; border:2px solid var(--border); border-radius:8px; margin:2rem 0">
+          <div style="background:var(--ink3); padding:1rem; border-radius:8px; margin:1rem 0">
+            <p style="margin:0.5rem 0"><strong>Session ID:</strong> <code id="sessionIdDisplay"></code></p>
+            <p style="margin:0.5rem 0"><strong>Expires in:</strong> <span id="expiryDisplay"></span></p>
+            <p style="margin:0.5rem 0"><strong>Link:</strong> <small id="qrLinkDisplay"></small></p>
+          </div>
+          <div style="background:var(--ink2); padding:1rem; border-radius:8px; margin:1rem 0; color:var(--text2)">
+            <p style="margin:0; font-size:0.9rem">📊 Students Checked In: <strong id="checkinCount" style="color:var(--green2)">0</strong></p>
+          </div>
+          <button class="btn" style="width:100%; background:var(--red2); color:white; padding:0.75rem; border-radius:8px; border:none; cursor:pointer; font-weight:600" onclick="generateMobileQR()">
+            🔄 Generate New QR
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function initFacultyQRGenerator(){
-  if(window.QRAttendance && window.QRAttendance.teacherGenerator){
-    QRAttendance.teacherGenerator.init('qrGeneratorContainer');
-  } else {
-    toast('QR Generator module not loaded','error');
+  // Just initialize, actual work done in generateMobileQR
+}
+
+async function generateMobileQR(){
+  const course = document.getElementById('qrCourse').value.trim() || 'Class';
+  const subject = document.getElementById('qrSubject').value.trim() || 'Session';
+  const validity = parseInt(document.getElementById('qrValidity').value) || 5;
+  
+  if(validity < 1 || validity > 120){
+    toast('Validity must be between 1-120 minutes','warning');
+    return;
+  }
+  
+  try{
+    const resp = await fetch(`${AMS_CONFIG.API_URL}/api/qr/mobile-session`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        faculty_id: AMS.user.id,
+        course_id: course,
+        subject: subject,
+        validity_minutes: validity
+      })
+    });
+    
+    if(!resp.ok) throw new Error('Failed to generate QR');
+    
+    const data = await resp.json();
+    if(!data.success) throw new Error(data.error);
+    
+    // Show QR
+    document.getElementById('generatedQRContent').style.display = 'block';
+    document.getElementById('qrCodeImage').src = `data:image/png;base64,${data.qr_code_base64}`;
+    document.getElementById('sessionIdDisplay').textContent = data.session_id;
+    document.getElementById('qrLinkDisplay').textContent = data.qr_url;
+    
+    // Calculate expiry
+    const expiryTime = new Date(data.expires_at);
+    const now = new Date();
+    let remainingMs = expiryTime - now;
+    
+    function updateExpiry(){
+      if(remainingMs <= 0){
+        clearInterval(expiryInterval);
+        document.getElementById('expiryDisplay').textContent = 'Expired';
+        return;
+      }
+      const mins = Math.floor(remainingMs / 60000);
+      const secs = Math.floor((remainingMs % 60000) / 1000);
+      document.getElementById('expiryDisplay').textContent = `${mins}:${secs.toString().padStart(2,'0')}`;
+      remainingMs -= 1000;
+    }
+    
+    updateExpiry();
+    const expiryInterval = setInterval(updateExpiry, 1000);
+    
+    toast('✅ QR Code generated successfully!','success');
+  } catch(e){
+    console.error('QR generation error:', e);
+    toast('❌ ' + e.message, 'error');
   }
 }
 

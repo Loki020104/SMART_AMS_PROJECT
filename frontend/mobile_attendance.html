@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mark Attendance</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+    
+    .container {
+      width: 100%;
+      max-width: 500px;
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      overflow: hidden;
+    }
+    
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 2rem 1.5rem;
+      text-align: center;
+    }
+    
+    .header h1 {
+      font-size: 1.75rem;
+      margin-bottom: 0.5rem;
+    }
+    
+    .header p {
+      font-size: 0.9rem;
+      opacity: 0.9;
+    }
+    
+    .content {
+      padding: 2rem 1.5rem;
+    }
+    
+    .form-group {
+      margin-bottom: 1.5rem;
+    }
+    
+    .form-group label {
+      display: block;
+      font-weight: 600;
+      margin-bottom: 0.5rem;
+      color: #2c3e50;
+      font-size: 0.95rem;
+    }
+    
+    .form-group input,
+    .form-group select {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      border: 2px solid #e0e0e0;
+      border-radius: 8px;
+      font-size: 1rem;
+      transition: all 0.3s ease;
+    }
+    
+    .form-group input:focus,
+    .form-group select:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+    
+    .form-group input:disabled {
+      background: #f5f5f5;
+      color: #999;
+    }
+    
+    .button-group {
+      display: grid;
+      gap: 1rem;
+      margin-top: 2rem;
+    }
+    
+    button {
+      padding: 1rem;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+    
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    
+    .btn-primary:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+    }
+    
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    
+    .btn-secondary {
+      background: #f0f0f0;
+      color: #2c3e50;
+    }
+    
+    .btn-secondary:hover {
+      background: #e0e0e0;
+    }
+    
+    .status {
+      padding: 1rem;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      text-align: center;
+      font-weight: 500;
+    }
+    
+    .status.loading {
+      background: #e3f2fd;
+      color: #1565c0;
+    }
+    
+    .status.success {
+      background: #e8f5e9;
+      color: #2e7d32;
+    }
+    
+    .status.error {
+      background: #ffebee;
+      color: #c62828;
+    }
+    
+    .progress-steps {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 2rem;
+      justify-content: space-between;
+    }
+    
+    .step {
+      flex: 1;
+      height: 4px;
+      background: #e0e0e0;
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    
+    .step.active {
+      background: #667eea;
+    }
+    
+    .step.completed {
+      background: #4caf50;
+    }
+    
+    .info-text {
+      font-size: 0.85rem;
+      color: #666;
+      margin-top: 0.3rem;
+    }
+    
+    .loader {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #667eea;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 1rem auto;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    .camera-container {
+      position: relative;
+      width: 100%;
+      max-width: 300px;
+      margin: 1rem auto;
+      border-radius: 8px;
+      overflow: hidden;
+      background: #000;
+    }
+    
+    video, canvas {
+      width: 100%;
+      display: block;
+    }
+    
+    .camera-overlay {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 200px;
+      height: 200px;
+      border: 3px solid #667eea;
+      border-radius: 8px;
+      opacity: 0.5;
+      pointer-events: none;
+    }
+    
+    .verification-badge {
+      display: inline-block;
+      padding: 0.25rem 0.75rem;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin-top: 0.5rem;
+    }
+    
+    .badge-success {
+      background: #4caf50;
+      color: white;
+    }
+    
+    .badge-warning {
+      background: #ff9800;
+      color: white;
+    }
+    
+    .badge-pending {
+      background: #2196f3;
+      color: white;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>📝 Mark Attendance</h1>
+      <p>Complete all verification steps</p>
+    </div>
+    
+    <div class="content">
+      <div class="progress-steps">
+        <div class="step completed" id="step1"></div>
+        <div class="step active" id="step2"></div>
+        <div class="step" id="step3"></div>
+        <div class="step" id="step4"></div>
+      </div>
+      
+      <div id="statusMessage"></div>
+      
+      <!-- Step 1: QR Validation -->
+      <div id="step1-content" style="display:none">
+        <div class="status loading">✅ QR Code Verified</div>
+        <p style="color:#666; text-align:center;">Loading session details...</p>
+      </div>
+      
+      <!-- Step 2: Student Details -->
+      <div id="step2-content">
+        <h2 style="font-size:1.25rem; margin-bottom:1.5rem; color:#2c3e50;">Student Information</h2>
+        
+        <div class="form-group">
+          <label>🆔 Roll Number</label>
+          <input type="text" id="rollNo" placeholder="e.g., 2026CSE001" required>
+          <p class="info-text">Your college roll number</p>
+        </div>
+        
+        <div class="form-group">
+          <label>👤 Full Name</label>
+          <input type="text" id="studentName" placeholder="Your full name" required>
+          <p class="info-text">As registered in system</p>
+        </div>
+        
+        <div class="form-group">
+          <label>📚 Department</label>
+          <select id="department" required>
+            <option value="">Select Department</option>
+            <option value="CSE">Computer Science (CSE)</option>
+            <option value="AI">Artificial Intelligence (AI)</option>
+            <option value="ECE">Electronics (ECE)</option>
+            <option value="ME">Mechanical (ME)</option>
+            <option value="CE">Civil (CE)</option>
+            <option value="EEE">Electrical (EEE)</option>
+            <option value="IOT">IoT & Embedded (IOT)</option>
+            <option value="ADS">Data Science (ADS)</option>
+            <option value="MBA">MBA</option>
+            <option value="BBA">BBA</option>
+            <option value="FSD">Full Stack Dev (FSD)</option>
+          </select>
+          <p class="info-text">Your department</p>
+        </div>
+        
+        <button class="btn-primary" onclick="proceedToLocation()" style="width:100%;">
+          ✅ Proceed to Location Check
+        </button>
+      </div>
+      
+      <!-- Step 3: Location Verification -->
+      <div id="step3-content" style="display:none">
+        <h2 style="font-size:1.25rem; margin-bottom:1.5rem; color:#2c3e50;">📍 Location Verification</h2>
+        
+        <div id="locationStatus"></div>
+        
+        <button class="btn-primary" onclick="getLocation()" style="width:100%;">
+          📍 Verify My Location
+        </button>
+        <p class="info-text" style="text-align:center; margin-top:1rem;">
+          Your location will be verified against the classroom location
+        </p>
+      </div>
+      
+      <!-- Step 4: Face Recognition -->
+      <div id="step4-content" style="display:none">
+        <h2 style="font-size:1.25rem; margin-bottom:1.5rem; color:#2c3e50;">📷 Face Verification</h2>
+        
+        <div class="camera-container" style="display:none" id="cameraContainer">
+          <video id="faceVideo" autoplay playsinline></video>
+          <div class="camera-overlay"></div>
+          <canvas id="faceCanvas" style="display:none;"></canvas>
+        </div>
+        
+        <div id="faceStatus"></div>
+        
+        <div class="button-group">
+          <button class="btn-primary" onclick="startFaceCapture()" style="width:100%;">
+            📷 Capture Face
+          </button>
+          <button class="btn-secondary" onclick="submitAttendance()" style="width:100%;">
+            ✅ Submit Attendance
+          </button>
+        </div>
+      </div>
+      
+      <!-- Success Message -->
+      <div id="successContent" style="display:none; text-align:center;">
+        <div style="font-size:4rem; margin:2rem 0;">✅</div>
+        <h2 style="color:#2e7d32; margin-bottom:1rem;">Attendance Marked Successfully!</h2>
+        <p style="color:#666; margin-bottom:2rem;">Your attendance has been recorded and verified by facial recognition.</p>
+        
+        <div style="background:#e8f5e9; padding:1.5rem; border-radius:8px; margin:1.5rem 0; text-align:left;">
+          <p style="margin:0.5rem 0;"><strong>Student:</strong> <span id="successName"></span></p>
+          <p style="margin:0.5rem 0;"><strong>Roll No:</strong> <span id="successRoll"></span></p>
+          <p style="margin:0.5rem 0;"><strong>Department:</strong> <span id="successDept"></span></p>
+          <p style="margin:0.5rem 0;"><strong>Location:</strong> <span id="successLocation"></span></p>
+          <p style="margin:0.5rem 0;"><strong>Time:</strong> <span id="successTime"></span></p>
+        </div>
+        
+        <button class="btn-secondary" onclick="location.reload()" style="width:100%; margin-top:2rem;">
+          Done
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Get session ID from URL parameter
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get('session');
+    const apiUrl = window.location.origin.includes('localhost') 
+      ? 'http://localhost:5000'
+      : 'https://smartams-backend-ts3a5sewfq-uc.a.run.app';
+    
+    let attendanceData = {
+      session_id: sessionId,
+      roll_no: '',
+      name: '',
+      department: '',
+      latitude: null,
+      longitude: null,
+      face_image: null,
+      timestamp: new Date().toISOString()
+    };
+    
+    let currentStep = 2;
+    
+    // Validate session on load
+    window.addEventListener('load', async () => {
+      if (!sessionId) {
+        showStatus('❌ Invalid session. No QR code found.', 'error');
+        return;
+      }
+      
+      try {
+        const resp = await fetch(`${apiUrl}/api/attendance/validate-session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId })
+        });
+        
+        const data = await resp.json();
+        if (!data.success) {
+          showStatus('❌ ' + data.error, 'error');
+        }
+      } catch (e) {
+        console.error('Session validation error:', e);
+      }
+    });
+    
+    function showStatus(message, type) {
+      const el = document.getElementById('statusMessage');
+      el.innerHTML = `<div class="status ${type}">${message}</div>`;
+    }
+    
+    function updateStep(step) {
+      currentStep = step;
+      document.querySelectorAll('[id^="step"][id$="-content"]').forEach(el => el.style.display = 'none');
+      document.getElementById(`step${step}-content`).style.display = 'block';
+      
+      for (let i = 1; i <= 4; i++) {
+        const stepEl = document.getElementById(`step${i}`);
+        stepEl.classList.remove('active', 'completed');
+        if (i < step) stepEl.classList.add('completed');
+        if (i === step) stepEl.classList.add('active');
+      }
+    }
+    
+    async function proceedToLocation() {
+      const rollNo = document.getElementById('rollNo').value.trim();
+      const name = document.getElementById('studentName').value.trim();
+      const dept = document.getElementById('department').value;
+      
+      if (!rollNo || !name || !dept) {
+        showStatus('⚠️ Please fill all required fields', 'error');
+        return;
+      }
+      
+      attendanceData.roll_no = rollNo;
+      attendanceData.name = name;
+      attendanceData.department = dept;
+      
+      updateStep(3);
+      showStatus('', '');
+    }
+    
+    async function getLocation() {
+      showStatus('📍 Getting your location...', 'loading');
+      
+      if (!navigator.geolocation) {
+        showStatus('❌ Geolocation not supported', 'error');
+        return;
+      }
+      
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          attendanceData.latitude = position.coords.latitude;
+          attendanceData.longitude = position.coords.longitude;
+          
+          const latStr = position.coords.latitude.toFixed(4);
+          const lngStr = position.coords.longitude.toFixed(4);
+          
+          document.getElementById('locationStatus').innerHTML = `
+            <div class="status success">
+              ✅ Location Verified<br>
+              <span style="font-size:0.9rem;">📍 ${latStr}, ${lngStr}</span>
+            </div>
+          `;
+          
+          updateStep(4);
+          startFaceCapture();
+        },
+        (error) => {
+          showStatus('❌ Could not access location: ' + error.message, 'error');
+        },
+        { timeout: 10000, enableHighAccuracy: true }
+      );
+    }
+    
+    async function startFaceCapture() {
+      document.getElementById('cameraContainer').style.display = 'block';
+      
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+        document.getElementById('faceVideo').srcObject = stream;
+        document.getElementById('faceStatus').innerHTML = `
+          <div class="status loading">
+            📷 Position your face in the frame...
+          </div>
+        `;
+      } catch (error) {
+        document.getElementById('faceStatus').innerHTML = `
+          <div class="status error">
+            ❌ Camera access denied
+          </div>
+        `;
+      }
+    }
+    
+    async function submitAttendance() {
+      const video = document.getElementById('faceVideo');
+      if (!video.srcObject) {
+        showStatus('❌ Please capture your face first', 'error');
+        return;
+      }
+      
+      // Capture face image
+      const canvas = document.getElementById('faceCanvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+      attendanceData.face_image = canvas.toDataURL('image/jpeg');
+      
+      showStatus('⏳ Submitting attendance...', 'loading');
+      
+      try {
+        const resp = await fetch(`${apiUrl}/api/attendance/mark-qr`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(attendanceData)
+        });
+        
+        const result = await resp.json();
+        
+        if (result.success) {
+          // Stop camera
+          video.srcObject.getTracks().forEach(t => t.stop());
+          
+          // Show success
+          document.getElementById('step2-content').style.display = 'none';
+          document.getElementById('step3-content').style.display = 'none';
+          document.getElementById('step4-content').style.display = 'none';
+          document.getElementById('successContent').style.display = 'block';
+          
+          document.getElementById('successName').textContent = attendanceData.name;
+          document.getElementById('successRoll').textContent = attendanceData.roll_no;
+          document.getElementById('successDept').textContent = attendanceData.department;
+          document.getElementById('successLocation').textContent = 
+            `${attendanceData.latitude?.toFixed(4)}, ${attendanceData.longitude?.toFixed(4)}`;
+          document.getElementById('successTime').textContent = 
+            new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          
+          // Update all steps to completed
+          for (let i = 1; i <= 4; i++) {
+            document.getElementById(`step${i}`).classList.add('completed');
+          }
+          
+          showStatus('✅ Attendance recorded successfully!', 'success');
+        } else {
+          showStatus('❌ ' + (result.error || 'Failed to mark attendance'), 'error');
+        }
+      } catch (e) {
+        console.error('Submission error:', e);
+        showStatus('❌ Connection error. Please try again.', 'error');
+      }
+    }
+  </script>
+</body>
+</html>
