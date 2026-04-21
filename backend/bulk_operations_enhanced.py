@@ -144,17 +144,19 @@ async def bulk_import_users_async(db, users: List[dict]) -> Dict:
     skipped_count = []
     errors = failed_records.copy()
 
-    async def chunk_insert_simulation(chunk: List[dict]) -> None:
-        """Simulate chunk insertion (replace with actual DB call)"""
+    async def chunk_insert_real(chunk: List[dict]) -> None:
+        """Insert chunk into Supabase database"""
         try:
-            # In production, this would be:
-            # response = db.table("users").upsert(chunk, on_conflict="username").execute()
-            # For now, simulate success
-            inserted_count.append(len(chunk))
+            # Insert batch into Supabase (upsert to handle duplicates)
+            response = db.table("users").upsert(chunk, on_conflict="username").execute()
+            batch_inserted = len(response.data) if response.data else len(chunk)
+            inserted_count.append(batch_inserted)
             skipped_count.append(0)
-            logger.info(f"[BULK_IMPORT_ASYNC] Chunk inserted: {len(chunk)} records")
+            logger.info(f"[BULK_IMPORT_ASYNC] Chunk inserted: {batch_inserted} records")
         except Exception as e:
             logger.error(f"[BULK_IMPORT_ASYNC] Chunk insert failed: {str(e)}")
+            inserted_count.append(0)
+            skipped_count.append(len(chunk))
             errors.append({"chunk_size": len(chunk), "error": str(e)})
 
     # Process chunks with bounded concurrency
@@ -162,7 +164,7 @@ async def bulk_import_users_async(db, users: List[dict]) -> Dict:
 
     async def guarded_insert(chunk):
         async with semaphore:
-            await chunk_insert_simulation(chunk)
+            await chunk_insert_real(chunk)
 
     await asyncio.gather(*[guarded_insert(c) for c in chunks])
 
@@ -223,14 +225,14 @@ def bulk_import_users_sync(db, users: List[dict]) -> Dict:
     
     for batch_num, chunk in enumerate(chunks, 1):
         try:
-            # In production with Supabase:
-            # response = db.table("users").upsert(chunk, on_conflict="username", ignore_duplicates=True).execute()
-            # For now, simulate batch insert
-            inserted += len(chunk)
-            logger.info(f"[BULK_IMPORT_SYNC] Batch {batch_num}/{len(chunks)}: +{len(chunk)} records")
+            # Insert batch into Supabase (upsert to handle duplicates)
+            response = db.table("users").upsert(chunk, on_conflict="username").execute()
+            batch_inserted = len(response.data) if response.data else len(chunk)
+            inserted += batch_inserted
+            logger.info(f"[BULK_IMPORT_SYNC] Batch {batch_num}/{len(chunks)}: +{batch_inserted} records inserted")
         except Exception as e:
             logger.error(f"[BULK_IMPORT_SYNC] Batch {batch_num} failed: {str(e)}")
-            errors.append({"batch": batch_num, "error": str(e)})
+            errors.append({"batch": batch_num, "chunk_size": len(chunk), "error": str(e)})
 
     result = {
         "total": len(users),
@@ -285,13 +287,14 @@ def bulk_import_timetable(db, slots: List[dict]) -> Dict:
     
     for batch_num, chunk in enumerate(chunks, 1):
         try:
-            # In production:
-            # response = db.table("timetable").upsert(chunk, on_conflict="slot_id").execute()
-            inserted += len(chunk)
-            logger.info(f"[BULK_IMPORT_TIMETABLE] Batch {batch_num}/{len(chunks)}: +{len(chunk)} slots")
+            # Insert batch into Supabase (upsert to handle duplicates)
+            response = db.table("timetable").upsert(chunk, on_conflict="slot_id").execute()
+            batch_inserted = len(response.data) if response.data else len(chunk)
+            inserted += batch_inserted
+            logger.info(f"[BULK_IMPORT_TIMETABLE] Batch {batch_num}/{len(chunks)}: +{batch_inserted} slots inserted")
         except Exception as e:
             logger.error(f"[BULK_IMPORT_TIMETABLE] Batch {batch_num} failed: {str(e)}")
-            errors.append({"batch": batch_num, "error": str(e)})
+            errors.append({"batch": batch_num, "chunk_size": len(chunk), "error": str(e)})
 
     result = {
         "total": len(slots),
