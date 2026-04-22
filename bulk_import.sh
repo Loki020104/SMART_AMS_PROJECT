@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Bulk import script using curl
-API_URL="https://smartams-backend-76160313029.us-central1.run.app"
+API_URL="https://smartams-backend-ts3a5sewfq-uc.a.run.app"
 BATCH_SIZE=50
 
 echo "🚀 SMART AMS BULK IMPORT SCRIPT"
